@@ -1,17 +1,14 @@
 block_cipher = None
 
 a = Analysis(
-    ['gui_refactored.py'],
+    ['gui.py'],
     pathex=[],
     binaries=[],
     datas=[
         # Include icon and other resources
         ('icon.ico', '.'),
         ('icon.icns', '.'),
-        # Include orpheus.py script
-        #('orpheus.py', '.'),
-        # Include config directory if it exists
-        #('config', 'config'),
+        ('update_checker.py', '.'),
     ],
     hiddenimports=[
         'customtkinter',
@@ -27,22 +24,15 @@ a = Analysis(
         'CTkToolTip',
         'wave',
         'Cryptodome.Cipher',
-	'Cryptodome.Cipher.AES',
-	'Cryptodome.Cipher.ARC4',
+	    'Cryptodome.Cipher.AES',
+	    'Cryptodome.Cipher.ARC4',
         'Cryptodome.Cipher.Blowfish',
         'Cryptodome.Hash',
         'Cryptodome.Hash.MD5',
         'ffmpeg-python',
-	'uuid',
-		#'base64',
-		#'hashlib',
-		#'secrets',
-		#'webbrowser',
-		#'abc',
-		#'dataclass',
-		#'Enum',
-		#'requests',
-		#'urllib3'
+	    'uuid',
+		'requests',
+        'webbrowser'
     ],
     excludes=['torch', 'cuda', 'pytorch', 'matplotlib', 'pandas', 'numpy'],
     hookspath=[],
