@@ -1,0 +1,120 @@
+# update_checker.py
+import requests
+import threading
+import tkinter.messagebox
+import webbrowser
+from packaging.version import parse as parse_version # Requires 'packaging' package
+
+# --- Configuration ---
+# Replace with your actual GitHub username and repository name
+GITHUB_REPO_OWNER = "YOUR_USERNAME"
+GITHUB_REPO_NAME = "YOUR_REPOSITORY"
+GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/releases/latest"
+RELEASES_PAGE_URL = f"https://github.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/releases"
+
+# --- Update Check Logic ---
+
+def get_latest_release_info():
+    """Fetches the latest release information from the GitHub API."""
+    try:
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        response = requests.get(GITHUB_API_URL, headers=headers, timeout=10) # 10 second timeout
+        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"[Update Check] Network or API error: {e}")
+        return None
+    except Exception as e: # Catch other potential errors (e.g., JSON decoding)
+        print(f"[Update Check] Unexpected error fetching release info: {e}")
+        return None
+
+def compare_versions(current_version_str, latest_version_str):
+    """
+    Compares the current version with the latest version tag.
+    Returns True if the latest version is newer, False otherwise.
+    Handles potential 'v' prefix in tags (e.g., v1.0.0).
+    """
+    try:
+        # Normalize tags by removing potential leading 'v'
+        current_version_str = current_version_str.lstrip('v')
+        latest_version_str = latest_version_str.lstrip('v')
+
+        current_version = parse_version(current_version_str)
+        latest_version = parse_version(latest_version_str)
+
+        return latest_version > current_version
+    except Exception as e:
+        print(f"[Update Check] Error comparing versions ('{current_version_str}' vs '{latest_version_str}'): {e}")
+        return False # Treat comparison errors as 'no update found'
+
+def show_update_dialog(new_version_tag):
+    """Displays a dialog box informing the user about the update."""
+    title = "Update Available"
+    message = (
+        f"A new version ({new_version_tag}) is available!\n\n"
+        f"Would you like to visit the releases page to download it?"
+    )
+    # Use askyesno for a Yes/No choice
+    if tkinter.messagebox.askyesno(title, message, icon=tkinter.messagebox.INFO):
+        try:
+            webbrowser.open(RELEASES_PAGE_URL, new=2) # Open in new tab/window
+        except Exception as e:
+            print(f"[Update Check] Failed to open web browser: {e}")
+            tkinter.messagebox.showerror("Error", f"Could not open the releases page automatically.\n\nPlease visit:\n{RELEASES_PAGE_URL}", icon=tkinter.messagebox.WARNING)
+
+def check_for_updates(current_version):
+    """
+    Performs the update check: fetches latest release, compares versions,
+    and shows dialog if an update is found.
+    Designed to be run in a separate thread.
+    """
+    print("[Update Check] Checking for updates...")
+    release_info = get_latest_release_info()
+
+    if not release_info or 'tag_name' not in release_info:
+        print("[Update Check] Could not retrieve valid release information.")
+        return # Silently fail if no info or tag_name
+
+    latest_tag = release_info['tag_name']
+    print(f"[Update Check] Latest release tag: {latest_tag}, Current version: {current_version}")
+
+    if compare_versions(current_version, latest_tag):
+        print(f"[Update Check] New version found: {latest_tag}")
+        # Schedule the dialog box to run in the main Tkinter thread
+        # Assuming 'app' is the global root CustomTkinter window instance in gui.py
+        # This needs coordination with how gui.py is structured.
+        # For now, we'll call it directly, but this WILL cause issues if
+        # check_for_updates is called from a non-main thread without scheduling.
+        # We will address this when integrating into gui.py.
+        show_update_dialog(latest_tag)
+    else:
+        print("[Update Check] Application is up-to-date.")
+
+# --- Helper for Threaded Check ---
+
+def run_check_in_thread(current_version, root_window):
+    """
+    Starts the update check in a separate thread.
+    Schedules the dialog display using root_window.after if an update is found.
+    """
+    def threaded_task():
+        print("[Update Check] Starting update check thread...")
+        release_info = get_latest_release_info()
+
+        if not release_info or 'tag_name' not in release_info:
+            print("[Update Check] Could not retrieve valid release information from thread.")
+            return
+
+        latest_tag = release_info['tag_name']
+        print(f"[Update Check Thread] Latest: {latest_tag}, Current: {current_version}")
+
+        if compare_versions(current_version, latest_tag):
+            print(f"[Update Check Thread] New version found: {latest_tag}. Scheduling dialog.")
+            # Safely schedule the dialog call in the main GUI thread
+            root_window.after(0, lambda: show_update_dialog(latest_tag))
+        else:
+            print("[Update Check Thread] Application is up-to-date.")
+
+    # Create and start the daemon thread
+    update_thread = threading.Thread(target=threaded_task, daemon=True)
+    update_thread.start() 
