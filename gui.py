@@ -2436,7 +2436,7 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
 
         # Description, GitHub, Version, Credits
         description_text = ("Makes downloading music with OrpheusDL easy on Win, macOS & Linux.\nSearch multiple platforms & download high-quality audio with metadata."); description_label = customtkinter.CTkLabel(about_frame, text=description_text, justify="center", wraplength=450); description_label.pack(pady=(0, 10))
-        github_url = "https://github.com/OrfiTeam/OrpheusDL"
+        github_url = "https://github.com/bascurtiz/OrpheusDL-GUI"
         command = lambda u=github_url: os.startfile(u) if platform.system() == "Windows" else subprocess.Popen(["open", u]) if platform.system() == "Darwin" else subprocess.Popen(["xdg-open", u])
         github_button = customtkinter.CTkButton(about_frame, text="GitHub", command=command, width=110, fg_color="#343638", hover_color="#1F6AA5")
         github_button.pack(pady=10)
