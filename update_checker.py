@@ -7,8 +7,8 @@ from packaging.version import parse as parse_version # Requires 'packaging' pack
 
 # --- Configuration ---
 # Replace with your actual GitHub username and repository name
-GITHUB_REPO_OWNER = "YOUR_USERNAME"
-GITHUB_REPO_NAME = "YOUR_REPOSITORY"
+GITHUB_REPO_OWNER = "bascurtiz"
+GITHUB_REPO_NAME = "OrpheusDL-GUI"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/releases/latest"
 RELEASES_PAGE_URL = f"https://github.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/releases"
 
