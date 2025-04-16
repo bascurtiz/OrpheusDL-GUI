@@ -17,6 +17,7 @@ import copy
 import customtkinter
 import datetime
 import enum
+import importlib.util # <<< Add importlib
 import inspect
 import io
 import json
@@ -2341,22 +2342,56 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
                     row += 1
 
         # Credential Sub-Tabs
-        # Use DEFAULT_SETTINGS and current_settings which were defined/loaded within this block
-        sorted_credentials_keys = sorted(DEFAULT_SETTINGS["credentials"].keys())
-        for platform_name in sorted_credentials_keys:
-            # Only add tab if platform exists in loaded credentials (or defaults if load failed but structure exists)
-            if platform_name in current_settings.get("credentials", {}) or platform_name in DEFAULT_SETTINGS["credentials"]:
-                fields = current_settings.get("credentials", {}).get(platform_name, {}) # Get loaded or empty dict
-                default_platform_fields = DEFAULT_SETTINGS["credentials"].get(platform_name, {}) # Get defaults
+        # Dynamically determine installed/loadable modules
+        installed_platform_names = []
+        if orpheus_instance and hasattr(orpheus_instance, 'module_settings') and hasattr(orpheus_instance, 'load_module'):
+            known_module_names = list(orpheus_instance.module_settings.keys())
+            platform_map_from_orpheus = {
+                "bugs": "BugsMusic", "nugs": "Nugs", "soundcloud": "SoundCloud",
+                "tidal": "Tidal", "qobuz": "Qobuz", "deezer": "Deezer",
+                "idagio": "Idagio", "kkbox": "KKBOX", "napster": "Napster",
+                "beatport": "Beatport", "musixmatch": "Musixmatch"
+                # Add other mappings if needed
+            }
+            print(f"[Settings Tabs] Checking known modules: {known_module_names}")
+            for module_name in known_module_names:
+                try:
+                    # Use importlib to check if module spec exists without full initialization/login
+                    module_spec = importlib.util.find_spec(f"modules.{module_name}")
+                    if module_spec:
+                        # Module exists, now check mapping and default settings
+                        gui_platform_name = platform_map_from_orpheus.get(module_name)
+                        if gui_platform_name and gui_platform_name in DEFAULT_SETTINGS["credentials"]:
+                            installed_platform_names.append(gui_platform_name)
+                            print(f"  -> Found module files: {module_name} ({gui_platform_name})")
+                        # else: # Optional: Log if mapping or default settings are missing
+                        #    print(f"  -> Module {module_name} found but no GUI mapping/default found.")
+                    # else: # Optional: Log if spec not found
+                    #     print(f"  -> Module spec not found for: {module_name}")
 
-                platform_tab = settings_tabview.add(platform_name.replace("_", " ")); settings_vars["credentials"][platform_name] = {}; platform_tab.grid_columnconfigure(1, weight=1); row = 0
-                for field_key, default_value in default_platform_fields.items():
-                    current_value = fields.get(field_key, default_value); var = tkinter.StringVar(value=str(current_value)); settings_vars["credentials"][platform_name][field_key] = var # Store only var
-                    current_pady = (13 if row == 0 else 2, 2); customtkinter.CTkLabel(platform_tab, text=f"{field_key.replace('_', ' ').title()}:").grid(row=row, column=0, sticky="w", padx=10, pady=current_pady)
-                    entry = customtkinter.CTkEntry(platform_tab, textvariable=var); entry.grid(row=row, column=1, sticky="ew", padx=10, pady=current_pady); entry.bind("<Button-3>", show_context_menu); entry.bind("<Button-2>", show_context_menu); entry.bind("<Control-Button-1>", show_context_menu)
-                    entry.bind("<FocusIn>", lambda e, w=entry: handle_focus_in(w))
-                    entry.bind("<FocusOut>", lambda e, w=entry: handle_focus_out(w))
-                    row += 1
+                except Exception as e_check:
+                    print(f"  -> Error checking module spec {module_name}: {e_check}") # Log other errors
+            sorted_installed_platforms = sorted(installed_platform_names)
+            print(f"[Settings Tabs] Will display tabs for: {sorted_installed_platforms}")
+        else:
+            print("[Settings Tabs] Orpheus instance not available or modules cannot be listed. Skipping credential tabs.")
+            sorted_installed_platforms = [] # Ensure it's an empty list if Orpheus isn't ready
+
+        # Use the dynamic list of installed platforms
+        for platform_name in sorted_installed_platforms:
+            # The rest of the loop remains largely the same, ensure defaults are still used for structure
+            # Note: We already confirmed platform_name is in DEFAULT_SETTINGS["credentials"] above
+            fields = current_settings.get("credentials", {}).get(platform_name, {}) # Get loaded or empty dict
+            default_platform_fields = DEFAULT_SETTINGS["credentials"].get(platform_name, {}) # Get defaults
+
+            platform_tab = settings_tabview.add(platform_name.replace("_", " ")); settings_vars["credentials"][platform_name] = {}; platform_tab.grid_columnconfigure(1, weight=1); row = 0
+            for field_key, default_value in default_platform_fields.items():
+                current_value = fields.get(field_key, default_value); var = tkinter.StringVar(value=str(current_value)); settings_vars["credentials"][platform_name][field_key] = var # Store only var
+                current_pady = (13 if row == 0 else 2, 2); customtkinter.CTkLabel(platform_tab, text=f"{field_key.replace('_', ' ').title()}:").grid(row=row, column=0, sticky="w", padx=10, pady=current_pady)
+                entry = customtkinter.CTkEntry(platform_tab, textvariable=var); entry.grid(row=row, column=1, sticky="ew", padx=10, pady=current_pady); entry.bind("<Button-3>", show_context_menu); entry.bind("<Button-2>", show_context_menu); entry.bind("<Control-Button-1>", show_context_menu)
+                entry.bind("<FocusIn>", lambda e, w=entry: handle_focus_in(w))
+                entry.bind("<FocusOut>", lambda e, w=entry: handle_focus_out(w))
+                row += 1
         # Save Controls Frame
         save_controls_frame = customtkinter.CTkFrame(settings_tab, fg_color="transparent"); save_controls_frame.pack(side="bottom", anchor="se", padx=10, pady=(0, 10))
         save_status_var = tkinter.StringVar(); save_status_label = customtkinter.CTkLabel(save_controls_frame, textvariable=save_status_var, text_color=("green", "lightgreen")); save_status_label.pack(side="left", padx=(0, 10))
