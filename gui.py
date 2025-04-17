@@ -17,7 +17,7 @@ import copy
 import customtkinter
 import datetime
 import enum
-import importlib.util # <<< Add importlib
+import importlib.util
 import inspect
 import io
 import json
@@ -66,7 +66,7 @@ if platform.system() == "Windows":
     except Exception as e1:
         try:
             # Fallback to System DPI Awareness (Vista+)
-            windll.user32.SetProcessDPIAware()
+            windll.user32.SetProcessDpiAware()
             print("[DPI] Set System DPI Awareness (Legacy) - Fallback")
         except Exception as e2:
             print(f"[DPI] Warning: Could not set DPI awareness ({e1} / {e2})")
@@ -252,30 +252,30 @@ try:
     CTkCheckBox._draw = _patched_ctkcheckbox_draw
     print("[Patch] Patched CTkCheckBox._draw method.")
 
-    # --- CTkComboBox Patch ---                                                   # <<< Added CTkComboBox patch
-    _original_ctkcombobox_draw = CTkComboBox._draw                                # <<< Added CTkComboBox patch
-                                                                                  # <<< Added CTkComboBox patch
-    def _patched_ctkcombobox_draw(self, *args, **kwargs):                         # <<< Added CTkComboBox patch
-        try:                                                                      # <<< Added CTkComboBox patch
-            # Call the original method                                            # <<< Added CTkComboBox patch
-            return _original_ctkcombobox_draw(self, *args, **kwargs)              # <<< Added CTkComboBox patch
-        except tkinter.TclError as e:                                             # <<< Added CTkComboBox patch
-            if "invalid command name" in str(e):                                  # <<< Added CTkComboBox patch
-                # Suppress the specific TclError                                  # <<< Added CTkComboBox patch
+    # --- CTkComboBox Patch ---
+    _original_ctkcombobox_draw = CTkComboBox._draw
+                                                                                  
+    def _patched_ctkcombobox_draw(self, *args, **kwargs):
+        try:
+            # Call the original method
+            return _original_ctkcombobox_draw(self, *args, **kwargs)
+        except tkinter.TclError as e:
+            if "invalid command name" in str(e):
+                # Suppress the specific TclError
                 pass # print(f"[Patch Suppressed] TclError in CTkComboBox._draw for {self}: {e}") # Optional debug
-            else:                                                                 # <<< Added CTkComboBox patch
-                # Re-raise other TclErrors                                        # <<< Added CTkComboBox patch
-                raise e                                                           # <<< Added CTkComboBox patch
-        except Exception as e:                                                    # <<< Added CTkComboBox patch
-             # Catch and report other unexpected errors during draw               # <<< Added CTkComboBox patch
+            else:
+                # Re-raise other TclErrors
+                raise e
+        except Exception as e:
+             # Catch and report other unexpected errors during draw
             print(f"[Patch Error] Unexpected error in CTkComboBox._draw for {self}: {type(e).__name__}: {e}")
-            raise e # Re-raise other exceptions                                   # <<< Added CTkComboBox patch
-                                                                                  # <<< Added CTkComboBox patch
-    CTkComboBox._draw = _patched_ctkcombobox_draw                                 # <<< Added CTkComboBox patch
-    print("[Patch] Patched CTkComboBox._draw method.")                            # <<< Added CTkComboBox patch
+            raise e # Re-raise other exceptions
+                                                                                  
+    CTkComboBox._draw = _patched_ctkcombobox_draw
+    print("[Patch] Patched CTkComboBox._draw method.")
 
 except ImportError:
-    print("[Patch Warning] Could not import CTkEntry, CTkCheckBox, or CTkComboBox for patching _draw methods.") # <<< Updated print
+    print("[Patch Warning] Could not import CTkEntry, CTkCheckBox, or CTkComboBox for patching _draw methods.")
 except Exception as e:
     print(f"[Patch Error] Failed to apply CustomTkinter _draw patches: {e}")
 
@@ -375,35 +375,25 @@ def load_settings():
 def initialize_orpheus():
     """Attempts to initialize the global Orpheus instance."""
     # Access global variables defined within the main process block
-    global orpheus_instance, app, download_button, search_button, DATA_DIR # <<< Added DATA_DIR
+    global orpheus_instance, app, download_button, search_button, DATA_DIR
 
     if not ORPHEUS_AVAILABLE:
         print("Orpheus library not available. Skipping initialization.")
         return False
     if orpheus_instance is None:
         try:
-            # <<< Pass DATA_DIR to Orpheus constructor (assuming 'data_path' argument) >>>
-            print(f"Initializing global Orpheus instance (data path: {DATA_DIR})...")
-            # !!! Assumption: Orpheus() accepts a data_path argument !!!
-            orpheus_instance = Orpheus(data_path=DATA_DIR)
+            # Directly initialize Orpheus without data_path
+            print("Initializing global Orpheus instance...")
+            orpheus_instance = Orpheus()
             print("Global Orpheus instance initialized successfully.")
+            # Optional: Keep the warning if extensions might still be relevant?
+            # print("[Warning] Orpheus initialized without explicit data_path. 'extensions' folder might still cause issues.")
             return True
         except Exception as e:
-            # Check if the error is specifically about the data_path argument
+            # Catch any general initialization errors
             import traceback
             tb_str = traceback.format_exc()
-            if "unexpected keyword argument 'data_path'" in str(e) or "__init__() got an unexpected keyword argument 'data_path'" in str(e):
-                 print("[Init Error] Orpheus() does not seem to accept 'data_path'. Trying without it...")
-                 try:
-                     # Fallback: Initialize without the data_path argument
-                     orpheus_instance = Orpheus()
-                     print("Global Orpheus instance initialized successfully (fallback).")
-                     print("[Warning] Orpheus initialized without explicit data_path. 'extensions' folder might still cause issues.")
-                     return True
-                 except Exception as e_fallback:
-                     error_message = f"FATAL: Failed to initialize Orpheus library (fallback attempt failed): {e_fallback}\nTraceback:\n{tb_str}"
-            else:
-                error_message = f"FATAL: Failed to initialize Orpheus library: {e}\nTraceback:\n{tb_str}"
+            error_message = f"FATAL: Failed to initialize Orpheus library: {e}\\nTraceback:\\n{tb_str}"
 
             print(error_message)
             try: # Try to show error in GUI (check if app exists)
@@ -1073,26 +1063,41 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             if not media_ident: raise ValueError(f"Module '{module_name}' custom_url_parse failed for URL: {url}")
             media_type = media_ident.media_type; media_id = media_ident.media_id
         else:
-            if not components or len(components) <= 2:
-                 if len(components) == 2 and components[1]: raise ValueError(f"Could not determine media type from short URL path: {parsed_url.path}")
-                 else: raise ValueError(f"Invalid URL path structure: {parsed_url.path}")
-            url_constants = orpheus.module_settings[module_name].url_constants
-            if not url_constants: url_constants = {'track': DownloadTypeEnum.track, 'album': DownloadTypeEnum.album, 'release': DownloadTypeEnum.album, 'playlist': DownloadTypeEnum.playlist, 'artist': DownloadTypeEnum.artist}
-            type_matches = []; media_id = None
-            for i, component in enumerate(components):
-                # Ensure component is a string before comparing
-                if isinstance(component, str):
-                    for url_keyword, type_enum in url_constants.items():
-                        if component == url_keyword:
-                            type_matches.append(type_enum)
-                            if i + 1 < len(components): media_id = components[i+1]
-                            break
-                    if type_matches and media_id is not None: break
-            if not type_matches: raise ValueError(f"Could not determine media type from URL path components: {components}")
-            media_type = type_matches[-1]
-            if media_id is None:
-                if len(components) > 1: media_id = components[-1]
-                else: raise ValueError(f"Could not determine media ID from URL path: {parsed_url.path}")
+            # <<< START JioSaavn Specific Check >>>
+            media_id = None # Initialize
+            media_type = None # Initialize
+            if module_name == 'jiosaavn' and len(components) > 2 and components[1] == 'song':
+                # Specific handling for jiosaavn.com/song/name/id URLs
+                media_type = DownloadTypeEnum.track
+                media_id = components[-1] # Assume ID is the last part
+                print(f"[URL Parse - JioSaavn Specific] Detected Type: {media_type}, ID: {media_id}")
+            # <<< END JioSaavn Specific Check >>>
+
+            # <<< General Parsing Logic (only if JioSaavn check didn't set ID/Type) >>>
+            if media_id is None or media_type is None:
+                print("[URL Parse] Using general parsing logic...") # Optional debug
+                if not components or len(components) <= 2:
+                     if len(components) == 2 and components[1]: raise ValueError(f"Could not determine media type from short URL path: {parsed_url.path}")
+                     else: raise ValueError(f"Invalid URL path structure: {parsed_url.path}")
+                url_constants = orpheus.module_settings[module_name].url_constants
+                if not url_constants: url_constants = {'track': DownloadTypeEnum.track, 'album': DownloadTypeEnum.album, 'release': DownloadTypeEnum.album, 'playlist': DownloadTypeEnum.playlist, 'artist': DownloadTypeEnum.artist}
+                type_matches = []; parsed_media_id = None # Use temporary variable name here
+                for i, component in enumerate(components):
+                    # Ensure component is a string before comparing
+                    if isinstance(component, str):
+                        for url_keyword, type_enum in url_constants.items():
+                            if component == url_keyword:
+                                type_matches.append(type_enum)
+                                if i + 1 < len(components): parsed_media_id = components[i+1]
+                                break
+                        if type_matches and parsed_media_id is not None: break
+                if not type_matches: raise ValueError(f"Could not determine media type from URL path components: {components}")
+                media_type = type_matches[-1]
+                if parsed_media_id is None:
+                    if len(components) > 1: parsed_media_id = components[-1]
+                    else: raise ValueError(f"Could not determine media ID from URL path: {parsed_url.path}")
+                media_id = parsed_media_id # Assign to the main variable
+                print(f"[URL Parse - General] Detected Type: {media_type}, ID: {media_id}")
 
         downloader.service = orpheus.load_module(module_name)
         downloader.service_name = module_name
