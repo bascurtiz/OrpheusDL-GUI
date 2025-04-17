@@ -78,17 +78,27 @@ if platform.system() == "Windows":
 # --- Define Script Directory Function FIRST ---
 # This needs to be defined early as it might be used by patching or path setup below.
 def get_script_directory():
-    """Gets the directory where the script/executable is running, handling bundled apps."""
+    """Gets the directory containing the script/executable, handling bundled apps."""
     if getattr(sys, 'frozen', False):
+        # Running as a bundled app (PyInstaller)
         application_path = os.path.dirname(sys.executable)
-        return application_path
+        if platform.system() == "Darwin":
+            # On macOS, sys.executable is inside Contents/MacOS
+            # Go up 3 levels to get the directory *containing* the .app bundle
+            # e.g., /path/to/OrpheusDL_GUI.app/Contents/MacOS -> /path/to/
+            bundle_dir = os.path.abspath(os.path.join(application_path, '..', '..', '..'))
+            return bundle_dir
+        else:
+            # On Windows/Linux, dirname(sys.executable) is usually the containing folder
+            return application_path
     else:
+        # Running as a standard Python script
         try:
             script_path = os.path.dirname(os.path.abspath(__file__))
-        except NameError:
+        except NameError: # __file__ is not defined, e.g., in interactive mode
             try:
                 script_path = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
-            except AttributeError:
+            except AttributeError: # inspect might fail in some environments
                 script_path = os.path.abspath(os.path.dirname(sys.argv[0]))
         return script_path
 
@@ -365,19 +375,36 @@ def load_settings():
 def initialize_orpheus():
     """Attempts to initialize the global Orpheus instance."""
     # Access global variables defined within the main process block
-    global orpheus_instance, app, download_button, search_button
+    global orpheus_instance, app, download_button, search_button, DATA_DIR # <<< Added DATA_DIR
 
     if not ORPHEUS_AVAILABLE:
         print("Orpheus library not available. Skipping initialization.")
         return False
     if orpheus_instance is None:
         try:
-            print("Initializing global Orpheus instance (using patched resource_path if applicable)...")
-            orpheus_instance = Orpheus() # Orpheus() uses patched path if applied
+            # <<< Pass DATA_DIR to Orpheus constructor (assuming 'data_path' argument) >>>
+            print(f"Initializing global Orpheus instance (data path: {DATA_DIR})...")
+            # !!! Assumption: Orpheus() accepts a data_path argument !!!
+            orpheus_instance = Orpheus(data_path=DATA_DIR)
             print("Global Orpheus instance initialized successfully.")
             return True
         except Exception as e:
-            error_message = f"FATAL: Failed to initialize Orpheus library: {e}\nDownloads and searches will likely fail."
+            # Check if the error is specifically about the data_path argument
+            import traceback
+            tb_str = traceback.format_exc()
+            if "unexpected keyword argument 'data_path'" in str(e) or "__init__() got an unexpected keyword argument 'data_path'" in str(e):
+                 print("[Init Error] Orpheus() does not seem to accept 'data_path'. Trying without it...")
+                 try:
+                     # Fallback: Initialize without the data_path argument
+                     orpheus_instance = Orpheus()
+                     print("Global Orpheus instance initialized successfully (fallback).")
+                     print("[Warning] Orpheus initialized without explicit data_path. 'extensions' folder might still cause issues.")
+                     return True
+                 except Exception as e_fallback:
+                     error_message = f"FATAL: Failed to initialize Orpheus library (fallback attempt failed): {e_fallback}\nTraceback:\n{tb_str}"
+            else:
+                error_message = f"FATAL: Failed to initialize Orpheus library: {e}\nTraceback:\n{tb_str}"
+
             print(error_message)
             try: # Try to show error in GUI (check if app exists)
                 if 'app' in globals() and app and app.winfo_exists():
@@ -520,7 +547,8 @@ def save_settings(show_confirmation: bool = True):
         # Access the global instance
         global orpheus_instance
         orpheus_instance = None # Clear the existing instance
-        initialize_orpheus()    # Call initialization to create a new instance with new settings
+        # Call initialize_orpheus() which now handles passing DATA_DIR
+        initialize_orpheus()
         print("[Save Settings] Orpheus instance re-initialized.")
 
         # <<< Show confirmation only if requested >>>
@@ -1953,9 +1981,41 @@ if __name__ == "__main__":
         # =====================================================================
         # Define globals that need function calls or are complex literals here
         _SCRIPT_DIR = get_script_directory() # Use the function defined at the top
+
+        # --- Change CWD to script directory (especially for bundled apps) ---
+        try:
+            os.chdir(_SCRIPT_DIR)
+            print(f"[CWD] Changed working directory to: {_SCRIPT_DIR}")
+        except Exception as e_chdir:
+            print(f"[CWD] Warning: Failed to change working directory: {e_chdir}")
+
         CONFIG_DIR = os.path.join(_SCRIPT_DIR, 'config')
+        DATA_DIR = os.path.join(_SCRIPT_DIR, 'data') # <<< Define DATA_DIR
+        MODULES_DIR = os.path.join(_SCRIPT_DIR, 'modules') # <<< Define MODULES_DIR
         CONFIG_FILE_NAME = 'settings.json'
         CONFIG_FILE_PATH = os.path.join(CONFIG_DIR, CONFIG_FILE_NAME)
+
+        # --- Add external modules directory to sys.path --- # <<< Add sys.path logic
+        if os.path.isdir(MODULES_DIR):                       # <<< Add sys.path logic
+            if MODULES_DIR not in sys.path:                  # <<< Add sys.path logic
+                sys.path.insert(0, MODULES_DIR)              # <<< Add sys.path logic
+                print(f"[SysPath] Added external modules directory: {MODULES_DIR}") # <<< Add sys.path logic
+            else:                                            # <<< Add sys.path logic
+                print(f"[SysPath] External modules directory already in sys.path: {MODULES_DIR}") # <<< Add sys.path logic
+        else:                                                # <<< Add sys.path logic
+            print(f"[SysPath] External modules directory not found: {MODULES_DIR}") # <<< Add sys.path logic
+
+        # --- Create necessary directories --- # <<< Add directory creation
+        try:                                     # <<< Add directory creation
+            os.makedirs(CONFIG_DIR, exist_ok=True) # <<< Add directory creation
+            os.makedirs(DATA_DIR, exist_ok=True)   # <<< Add directory creation
+            os.makedirs(MODULES_DIR, exist_ok=True) # <<< Add directory creation
+            print(f"[Init] Ensured config directory exists: {CONFIG_DIR}") # <<< Add directory creation
+            print(f"[Init] Ensured data directory exists: {DATA_DIR}")   # <<< Add directory creation
+            print(f"[Init] Ensured modules directory exists: {MODULES_DIR}") # <<< Add directory creation
+        except OSError as e:                         # <<< Add directory creation
+            print(f"[Error] Could not create config/data/modules directories: {e}") # <<< Add directory creation
+            # Decide if critical, maybe exit? For now, just print.          # <<< Add directory creation
 
         # --- Default Settings Structure ---
         DEFAULT_SETTINGS = {
@@ -2017,6 +2077,8 @@ if __name__ == "__main__":
         # =====================================================================
         try:
             load_settings()
+            # <<< Debug Print 1 >>>
+            print(f"[DEBUG] After load_settings: output_path = {current_settings.get('globals', {}).get('general', {}).get('output_path')}")
             initialize_orpheus() # <<< Attempt to initialize the global instance
         except FileNotFoundError as e:
              print(f"Initialization failed: {e}")
@@ -2032,6 +2094,8 @@ if __name__ == "__main__":
         # =====================================================================
         # --- GUI SETUP (Main Process Only) ---
         # =====================================================================
+        # <<< Debug Print 2 >>>
+        print(f"[DEBUG] Before GUI setup: output_path = {current_settings.get('globals', {}).get('general', {}).get('output_path')}")
         app = customtkinter.CTk()
         app.title("OrpheusDL GUI")
         app.geometry("940x600")
@@ -2490,6 +2554,31 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
             run_check_in_thread(__version__, app)
         except Exception as update_err:
             print(f"[Error] Failed to start update check: {update_err}")
+
+        # --- Explicitly update UI vars after main loop starts ---
+        def _initial_ui_update():
+            print("[DEBUG] Running _initial_ui_update...")
+            try:
+                # Re-set main path variable
+                if 'path_var_main' in globals() and path_var_main:
+                    main_path_val = current_settings.get("globals", {}).get("general", {}).get("output_path")
+                    if main_path_val is not None:
+                        print(f"  -> Setting path_var_main to: {main_path_val}")
+                        path_var_main.set(main_path_val)
+                    else:
+                        print("  -> main_path_val is None")
+                else:
+                    print("  -> path_var_main not found")
+
+                # Refresh settings tab
+                print("  -> Calling _update_settings_tab_widgets()")
+                _update_settings_tab_widgets()
+                print("[DEBUG] _initial_ui_update finished.")
+
+            except Exception as e_init_update:
+                 print(f"[Error] in _initial_ui_update: {e_init_update}")
+
+        app.after(10, _initial_ui_update) # Schedule the update shortly after start
 
         app.mainloop() # Start the Tkinter event loop
 

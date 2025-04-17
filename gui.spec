@@ -83,3 +83,15 @@ exe = EXE(
     entitlements_file=None,
     icon='icon.icns',
 )
+
+# --- macOS App Bundle Definition ---
+app = BUNDLE(
+    exe, # Include the EXE definition
+    name='OrpheusDL_GUI.app', # Standard macOS app naming
+    icon='icon.icns', # Specify the icon for the .app bundle
+    bundle_identifier=None, # Or set a specific identifier, e.g., 'com.yourdomain.orpheusdlgui'
+    info_plist={
+        'NSHighResolutionCapable': 'True', # Optional: Declare HiDPI support
+        'NSRequiresAquaSystemAppearance': 'False' # Force dark mode
+    }
+)
