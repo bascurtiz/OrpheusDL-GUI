@@ -1,3 +1,5 @@
+import platform
+
 block_cipher = None
 
 a = Analysis(
@@ -5,45 +7,44 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        # Include icon and other resources
         ('icon.ico', '.'),
         ('icon.icns', '.'),
         ('update_checker.py', '.'),
     ],
     hiddenimports=[
-    'certifi',
-    'colorama',
-    'Cryptodome',
-    'Cryptodome.Cipher',
-    'Cryptodome.Cipher.AES',
-    'Cryptodome.Cipher.ARC4',
-    'Cryptodome.Cipher.Blowfish',
-    'Cryptodome.Hash',
-    'Cryptodome.Hash.MD5',
-    'CTkToolTip',
-    'customtkinter',
-    'defusedxml',
-    'ffmpeg',
-    'future',
-    'idna',
-    'json',
-    'm3u8',
-    'mutagen',
-    'os',
-    'PIL',
-    'platform',
-    'requests',
-    'six',
-    'subprocess',
-    'sys',
-    'threading',
-    'time',
-    'tkinter',
-    'tqdm',
-    'urllib3',
-    'uuid',
-    'wave',
-    'webbrowser'
+        'certifi',
+        'colorama',
+        'Cryptodome',
+        'Cryptodome.Cipher',
+        'Cryptodome.Cipher.AES',
+        'Cryptodome.Cipher.ARC4',
+        'Cryptodome.Cipher.Blowfish',
+        'Cryptodome.Hash',
+        'Cryptodome.Hash.MD5',
+        'CTkToolTip',
+        'customtkinter',
+        'defusedxml',
+        'ffmpeg',
+        'future',
+        'idna',
+        'json',
+        'm3u8',
+        'mutagen',
+        'os',
+        'PIL',
+        'platform',
+        'requests',
+        'six',
+        'subprocess',
+        'sys',
+        'threading',
+        'time',
+        'tkinter',
+        'tqdm',
+        'urllib3',
+        'uuid',
+        'wave',
+        'webbrowser'
     ],
     excludes=['torch', 'cuda', 'pytorch', 'matplotlib', 'pandas', 'numpy'],
     hookspath=[],
@@ -85,13 +86,15 @@ exe = EXE(
 )
 
 # --- macOS App Bundle Definition ---
-app = BUNDLE(
-    exe, # Include the EXE definition
-    name='OrpheusDL_GUI.app', # Standard macOS app naming
-    icon='icon.icns', # Specify the icon for the .app bundle
-    bundle_identifier=None, # Or set a specific identifier, e.g., 'com.yourdomain.orpheusdlgui'
-    info_plist={
-        'NSHighResolutionCapable': 'True', # Optional: Declare HiDPI support
-        'NSRequiresAquaSystemAppearance': 'False' # Force dark mode
-    }
-)
+if platform.system() == 'Darwin':
+    app = BUNDLE(
+        exe,
+        name='OrpheusDL_GUI.app',
+        icon='icon.icns',
+        bundle_identifier=None,
+        info_plist={
+            'NSHighResolutionCapable': 'True',
+            'NSRequiresAquaSystemAppearance': 'False'
+        }
+    )
+
