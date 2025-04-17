@@ -1,9 +1,11 @@
 # update_checker.py
 import requests
 import threading
-import tkinter.messagebox
 import webbrowser
 from packaging.version import parse as parse_version # Requires 'packaging' package
+
+# <<< Import the custom dialog function >>>
+from gui_utils import show_centered_messagebox
 
 # --- Configuration ---
 # Replace with your actual GitHub username and repository name
@@ -47,20 +49,25 @@ def compare_versions(current_version_str, latest_version_str):
         print(f"[Update Check] Error comparing versions ('{current_version_str}' vs '{latest_version_str}'): {e}")
         return False # Treat comparison errors as 'no update found'
 
-def show_update_dialog(new_version_tag):
-    """Displays a dialog box informing the user about the update."""
+def show_update_dialog(new_version_tag, parent_window):
+    """Displays a styled dialog box informing the user about the update."""
     title = "Update Available"
     message = (
         f"A new version ({new_version_tag}) is available!\n\n"
-        f"Would you like to visit the releases page to download it?"
+        f"Please visit the Releases page on GitHub to download it (About tab)."
     )
-    # Use askyesno for a Yes/No choice
-    if tkinter.messagebox.askyesno(title, message, icon=tkinter.messagebox.INFO):
-        try:
-            webbrowser.open(RELEASES_PAGE_URL, new=2) # Open in new tab/window
-        except Exception as e:
-            print(f"[Update Check] Failed to open web browser: {e}")
-            tkinter.messagebox.showerror("Error", f"Could not open the releases page automatically.\n\nPlease visit:\n{RELEASES_PAGE_URL}", icon=tkinter.messagebox.WARNING)
+    # Use the custom message box
+    # Ensure parent_window is passed correctly
+    show_centered_messagebox(title, message, parent=parent_window)
+    # No return value needed, and no automatic browser opening for now
+    # if tkinter.messagebox.askyesno(title, message, icon=tkinter.messagebox.INFO):
+    #     try:
+    #         webbrowser.open(RELEASES_PAGE_URL, new=2) # Open in new tab/window
+    #     except Exception as e:
+    #         print(f"[Update Check] Failed to open web browser: {e}")
+    #         # Show error using the custom dialog as well
+    #         error_message = f"Could not open the releases page automatically.\n\nPlease visit:\n{RELEASES_PAGE_URL}"
+    #         show_centered_messagebox("Error", error_message, parent=parent_window)
 
 def check_for_updates(current_version):
     """
@@ -86,7 +93,9 @@ def check_for_updates(current_version):
         # For now, we'll call it directly, but this WILL cause issues if
         # check_for_updates is called from a non-main thread without scheduling.
         # We will address this when integrating into gui.py.
-        show_update_dialog(latest_tag)
+        # <<< This direct call is problematic, the threaded version handles scheduling >>>
+        # show_update_dialog(latest_tag)
+        pass # The direct call was incorrect, rely on the threaded approach
     else:
         print("[Update Check] Application is up-to-date.")
 
@@ -111,7 +120,8 @@ def run_check_in_thread(current_version, root_window):
         if compare_versions(current_version, latest_tag):
             print(f"[Update Check Thread] New version found: {latest_tag}. Scheduling dialog.")
             # Safely schedule the dialog call in the main GUI thread
-            root_window.after(0, lambda: show_update_dialog(latest_tag))
+            # Pass the root_window as the parent argument
+            root_window.after(0, lambda: show_update_dialog(latest_tag, parent_window=root_window))
         else:
             print("[Update Check Thread] Application is up-to-date.")
 
