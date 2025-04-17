@@ -8,7 +8,7 @@
 # 7. DOWNLOAD LOGIC
 # 8. SEARCH LOGIC
 # 9. SETTINGS TAB LOGIC
-# 10. MAIN EXECUTION GUARD
+# 10. MAIN EXECUTION
 
 # =============================================================================
 # --- 1. IMPORTS ---
@@ -1927,7 +1927,7 @@ def _update_settings_tab_widgets():
     except Exception as e: print(f"Error during settings UI refresh: {e}"); import traceback; traceback.print_exc()
 
 # =============================================================================
-# --- 10. MAIN EXECUTION GUARD ---
+# --- 10. MAIN EXECUTION ---
 # =============================================================================
 
 if __name__ == "__main__":
@@ -2000,27 +2000,27 @@ if __name__ == "__main__":
         CONFIG_FILE_NAME = 'settings.json'
         CONFIG_FILE_PATH = os.path.join(CONFIG_DIR, CONFIG_FILE_NAME)
 
-        # --- Add external modules directory to sys.path --- # <<< Add sys.path logic
-        if os.path.isdir(MODULES_DIR):                       # <<< Add sys.path logic
-            if MODULES_DIR not in sys.path:                  # <<< Add sys.path logic
-                sys.path.insert(0, MODULES_DIR)              # <<< Add sys.path logic
-                print(f"[SysPath] Added external modules directory: {MODULES_DIR}") # <<< Add sys.path logic
-            else:                                            # <<< Add sys.path logic
-                print(f"[SysPath] External modules directory already in sys.path: {MODULES_DIR}") # <<< Add sys.path logic
-        else:                                                # <<< Add sys.path logic
-            print(f"[SysPath] External modules directory not found: {MODULES_DIR}") # <<< Add sys.path logic
+        # --- Add external modules directory to sys.path --- 
+        if os.path.isdir(MODULES_DIR):
+            if MODULES_DIR not in sys.path:
+                sys.path.insert(0, MODULES_DIR)
+                print(f"[SysPath] Added external modules directory: {MODULES_DIR}")
+            else:
+                print(f"[SysPath] External modules directory already in sys.path: {MODULES_DIR}")
+        else:
+            print(f"[SysPath] External modules directory not found: {MODULES_DIR}")
 
-        # --- Create necessary directories --- # <<< Add directory creation
-        try:                                     # <<< Add directory creation
-            os.makedirs(CONFIG_DIR, exist_ok=True) # <<< Add directory creation
-            os.makedirs(DATA_DIR, exist_ok=True)   # <<< Add directory creation
-            os.makedirs(MODULES_DIR, exist_ok=True) # <<< Add directory creation
-            print(f"[Init] Ensured config directory exists: {CONFIG_DIR}") # <<< Add directory creation
-            print(f"[Init] Ensured data directory exists: {DATA_DIR}")   # <<< Add directory creation
-            print(f"[Init] Ensured modules directory exists: {MODULES_DIR}") # <<< Add directory creation
-        except OSError as e:                         # <<< Add directory creation
-            print(f"[Error] Could not create config/data/modules directories: {e}") # <<< Add directory creation
-            # Decide if critical, maybe exit? For now, just print.          # <<< Add directory creation
+        # --- Create necessary directories ---
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            os.makedirs(DATA_DIR, exist_ok=True)
+            os.makedirs(MODULES_DIR, exist_ok=True)
+            print(f"[Init] Ensured config directory exists: {CONFIG_DIR}")
+            print(f"[Init] Ensured data directory exists: {DATA_DIR}")
+            print(f"[Init] Ensured modules directory exists: {MODULES_DIR}")
+        except OSError as e:
+            print(f"[Error] Could not create config/data/modules directories: {e}")
+            # Decide if critical, maybe exit? For now, just print.
 
         # --- Default Settings Structure ---
         DEFAULT_SETTINGS = {
