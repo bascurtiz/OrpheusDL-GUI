@@ -668,24 +668,23 @@ def handle_focus_out(widget):
         print(f"Error in handle_focus_out for {widget}: {e}")
 
 # --- Centered Message Box ---
-# <<< REMOVE THE FUNCTION DEFINITION FROM HERE >>>
-# def show_centered_messagebox(title, message, dialog_type="info", parent=None):
-#     """Creates and displays a centered CTkToplevel message box."""
-#     # Access global 'app' defined in main process block
-#     global app
-#     if parent is None:
-#         # Ensure app exists before using it as default parent
-#         parent = app if 'app' in globals() and app else None
-#         if parent is None:
-#              print("ERROR: Cannot show messagebox, main app window not available.")
-#              return # Cannot proceed without a parent window
-#
-#     dialog = customtkinter.CTkToplevel(parent); dialog.title(title); dialog.geometry("450x150"); dialog.resizable(False, False); dialog.attributes("-topmost", True); dialog.transient(parent)
-#     dialog.update_idletasks(); parent_width = parent.winfo_width(); parent_height = parent.winfo_height(); parent_x = parent.winfo_x(); parent_y = parent.winfo_y(); dialog_width = dialog.winfo_width(); dialog_height = dialog.winfo_height()
-#     center_x = parent_x + (parent_width // 2) - (dialog_width // 2); center_y = parent_y + (parent_height // 2) - (dialog_height // 2); dialog.geometry(f"+{center_x}+{center_y}")
-#     message_label = customtkinter.CTkLabel(dialog, text=message, wraplength=400, justify="left"); message_label.pack(pady=(20, 10), padx=20, expand=True, fill="both")
-#     ok_button = customtkinter.CTkButton(dialog, text="OK", command=dialog.destroy, width=100); ok_button.pack(pady=(0, 20)); ok_button.focus_set(); dialog.bind("<Return>", lambda event: ok_button.invoke())
-#     dialog.grab_set(); dialog.wait_window()
+def show_centered_messagebox(title, message, dialog_type="info", parent=None):
+    """Creates and displays a centered CTkToplevel message box."""
+    # Access global 'app' defined in main process block
+    global app
+    if parent is None:
+        # Ensure app exists before using it as default parent
+        parent = app if 'app' in globals() and app else None
+        if parent is None:
+             print("ERROR: Cannot show messagebox, main app window not available.")
+             return # Cannot proceed without a parent window
+
+    dialog = customtkinter.CTkToplevel(parent); dialog.title(title); dialog.geometry("450x150"); dialog.resizable(False, False); dialog.attributes("-topmost", True); dialog.transient(parent)
+    dialog.update_idletasks(); parent_width = parent.winfo_width(); parent_height = parent.winfo_height(); parent_x = parent.winfo_x(); parent_y = parent.winfo_y(); dialog_width = dialog.winfo_width(); dialog_height = dialog.winfo_height()
+    center_x = parent_x + (parent_width // 2) - (dialog_width // 2); center_y = parent_y + (parent_height // 2) - (dialog_height // 2); dialog.geometry(f"+{center_x}+{center_y}")
+    message_label = customtkinter.CTkLabel(dialog, text=message, wraplength=400, justify="left"); message_label.pack(pady=(20, 10), padx=20, expand=True, fill="both")
+    ok_button = customtkinter.CTkButton(dialog, text="OK", command=dialog.destroy, width=100); ok_button.pack(pady=(0, 20)); ok_button.focus_set(); dialog.bind("<Return>", lambda event: ok_button.invoke())
+    dialog.grab_set(); dialog.wait_window()
 
 # --- Context Menu (Copy/Paste) ---
 def _create_menu():
