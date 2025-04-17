@@ -109,7 +109,7 @@ def show_update_dialog(new_version_tag, parent_window):
     title = "Update Available"
     message = (
         f"A new version ({new_version_tag}) is available!\n\n"
-        f"Please visit the Releases page on GitHub to download it (About tab)."
+        f"Visit the Releases page on GitHub to download (About tab)."
     )
     # Use the custom message box
     # Ensure parent_window is passed correctly
