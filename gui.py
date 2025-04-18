@@ -2497,40 +2497,48 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
         icon_title_frame = customtkinter.CTkFrame(about_frame, fg_color="transparent")
         icon_title_frame.pack(pady=(0, 5)) # Reduced bottom padding from 15 to 5
         try:
+            current_platform = platform.system() # <-- Added
+            print(f"[DEBUG AboutIcon] Platform detected: {current_platform}") # <-- Added
+
             # <<< Platform-specific icon filename for About tab >>>
-            if platform.system() == "Linux":
+            if current_platform == "Linux": # <-- Check against variable
                 icon_filename = "icon.png" # Use PNG on Linux
-            elif platform.system() == "Darwin":
+            elif current_platform == "Darwin": # <-- Check against variable
                 icon_filename = "icon.icns"
             else:
                 icon_filename = "icon.ico" # Default to ICO for Windows/Other
+            print(f"[DEBUG AboutIcon] Determined icon filename: {icon_filename}") # <-- Added
 
             # Use resource_path to find the icon, works for dev and bundle
             icon_path = resource_path(icon_filename)
-            print(f"Looking for AboutTab icon at: {icon_path}")
-            if icon_path and os.path.exists(icon_path):
-                # <<< Platform-specific icon size >>>
-                if platform.system() == "Darwin":
-                    icon_display_size = (72, 72) # 1.5x size for macOS
-                    print(f"[Icon macOS] Setting About icon size to {icon_display_size}")
-                else:
-                    icon_display_size = (48, 48) # Standard size for Windows/Other
-                    print(f"[Icon Other] Setting About icon size to {icon_display_size}")
+            print(f"[DEBUG AboutIcon] Generated icon path: {icon_path}") # <-- Added
+            print(f"[DEBUG AboutIcon] Looking for AboutTab icon at: {icon_path}")
+
+            icon_exists = os.path.exists(icon_path) # <-- Added
+            print(f"[DEBUG AboutIcon] Does icon exist at path? {icon_exists}") # <-- Added
+
+            if icon_path and icon_exists: # <-- Check variable
+                # ... (existing size calculation logic) ...
 
                 try:
+                    print("[DEBUG AboutIcon] Attempting to open image...") # <-- Added
                     # Resize and create CTkImage using the determined size
                     img = Image.open(icon_path).resize(icon_display_size, Image.LANCZOS)
+                    print("[DEBUG AboutIcon] Image opened successfully.") # <-- Added
                     icon_image = customtkinter.CTkImage(light_image=img, dark_image=img, size=icon_display_size)
+                    print("[DEBUG AboutIcon] CTkImage created successfully.") # <-- Added
                     icon_label = customtkinter.CTkLabel(icon_title_frame, text="", image=icon_image)
                     # <<< Conditional padding for the icon label >>>
-                    icon_pady = 0 if platform.system() == "Darwin" else 5
+                    icon_pady = 0 if current_platform == "Darwin" else 5 # <-- Check against variable
                     icon_label.pack(pady=icon_pady)
                 except Exception as img_e:
-                    print(f"Could not load icon image: {img_e}")
+                    print(f"[DEBUG AboutIcon] Could not load/process icon image: {type(img_e).__name__}: {img_e}") # <-- Modified
             else:
-                print(f"Icon file not found: {icon_path}")
+                print(f"[DEBUG AboutIcon] Icon file not found or path invalid: {icon_path}") # <-- Modified
         except Exception as path_e:
-            print(f"Error processing icon path: {path_e}")
+            print(f"[DEBUG AboutIcon] Error during icon path processing/loading: {type(path_e).__name__}: {path_e}") # <-- Modified
+        # ... (rest of About tab) ...
+
         # Make title bold and remove bottom padding
         title_label = customtkinter.CTkLabel(icon_title_frame, text="OrpheusDL GUI", font=customtkinter.CTkFont(weight="bold"))
         title_label.pack(pady=(0, 0))
