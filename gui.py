@@ -1983,9 +1983,8 @@ def _handle_settings_tab_change():
         # Check if it's a credential tab that hasn't been created yet
         if selected_tab_name != "Global" and selected_tab_name not in _created_credential_tabs:
             print(f"  -> Tab '{selected_tab_name}' needs content creation.")
-            # Map display name back to internal platform name (assuming they are the same for now)
-            # A more robust mapping might be needed if display names differ significantly
-            internal_platform_name = selected_tab_name.replace(" ", "_") # Simple mapping
+            # <<< The selected_tab_name IS the platform_key now >>>
+            internal_platform_name = selected_tab_name
 
             # Find the corresponding frame
             tab_frame = credential_tab_frames.get(selected_tab_name)
@@ -2541,59 +2540,22 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
                     row += 1
 
         # Credential Sub-Tabs (Lazy Loading Setup)
-        # Dynamically determine installed/loadable modules
-        installed_platform_names = []
-        if orpheus_instance and hasattr(orpheus_instance, 'module_settings') and hasattr(orpheus_instance, 'load_module'):
-            known_module_names = list(orpheus_instance.module_settings.keys())
-            # <<< ADDED MAPPING FOR applemusic -> AppleMusic >>>
-            platform_map_from_orpheus = {
-                "applemusic": "AppleMusic",
-                "bugs": "BugsMusic",
-                "nugs": "Nugs",
-                "soundcloud": "SoundCloud",
-                "tidal": "Tidal",
-                "qobuz": "Qobuz",
-                "deezer": "Deezer",
-                "idagio": "Idagio",
-                "kkbox": "KKBOX",
-                "napster": "Napster",
-                "beatport": "Beatport",
-                "musixmatch": "Musixmatch"
-                # Add other mappings if needed
-            }
-            print(f"[Settings Tabs] Checking known modules: {known_module_names}")
-            for module_name in known_module_names:
-                try:
-                    # Use importlib to check if module spec exists without full initialization/login
-                    module_spec = importlib.util.find_spec(f"modules.{module_name}")
-                    if module_spec:
-                        # Module exists, now check mapping and default settings
-                        gui_platform_name = platform_map_from_orpheus.get(module_name)
-                        if gui_platform_name and gui_platform_name in DEFAULT_SETTINGS["credentials"]:
-                            installed_platform_names.append(gui_platform_name)
-                            print(f"  -> Found module files: {module_name} ({gui_platform_name})")
-                        # else: # Optional: Log if mapping or default settings are missing
-                        #    print(f"  -> Module {module_name} found but no GUI mapping/default found.")
-                    # else: # Optional: Log if spec not found
-                    #     print(f"  -> Module spec not found for: {module_name}")
+        # <<< Remove dynamic module detection using find_spec >>>
+        # <<< Create tabs based on keys in DEFAULT_SETTINGS["credentials"] >>>
+        print("[Settings Tabs] Creating placeholder tabs based on DEFAULT_SETTINGS keys...")
+        credential_keys = list(DEFAULT_SETTINGS["credentials"].keys())
+        # Filter out Musixmatch if present
+        filtered_keys = [key for key in credential_keys if key != "Musixmatch"]
+        sorted_platform_keys = sorted(filtered_keys)
+        print(f"[Settings Tabs] Will display tabs for: {sorted_platform_keys}")
 
-                except Exception as e_check:
-                    print(f"  -> Error checking module spec {module_name}: {e_check}") # Log other errors
-            sorted_installed_platforms = sorted(installed_platform_names)
-            print(f"[Settings Tabs] Will display tabs for: {sorted_installed_platforms}")
-        else:
-            print("[Settings Tabs] Orpheus instance not available or modules cannot be listed. Skipping credential tabs.")
-            sorted_installed_platforms = [] # Ensure it's an empty list if Orpheus isn't ready
-
-        # <<< Modified loop: Only add tabs and store frames, don't create content yet >>>
-        for platform_name in sorted_installed_platforms:
-            # Map internal name to display name (e.g., "BugsMusic" -> "Bugs Music")
-            display_name = platform_name.replace("_", " ")
-            # Add the tab, getting the frame associated with it
-            platform_tab_frame = settings_tabview.add(display_name)
-            # Store the frame for later use by the handler
-            credential_tab_frames[display_name] = platform_tab_frame
-            print(f"  -> Added placeholder tab: {display_name}")
+        # <<< Modified loop: Use platform key directly for tab name and frame storage >>>
+        for platform_key in sorted_platform_keys:
+            # Add the tab using the key (e.g., "AppleMusic") as the name
+            platform_tab_frame = settings_tabview.add(platform_key)
+            # Store the frame using the key
+            credential_tab_frames[platform_key] = platform_tab_frame
+            print(f"  -> Added placeholder tab: {platform_key}")
 
         # Save Controls Frame (Remains the same)
         save_controls_frame = customtkinter.CTkFrame(settings_tab, fg_color="transparent"); save_controls_frame.pack(side="bottom", anchor="se", padx=10, pady=(0, 10))
