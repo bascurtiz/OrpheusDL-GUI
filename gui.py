@@ -39,6 +39,7 @@ from pathlib import Path
 from tkinter import ttk
 from tqdm import tqdm
 from urllib.parse import urlparse
+import traceback # Add near other imports if not present
 
 # Application Version
 __version__ = "1.0.1" # <<< Add version here
@@ -448,8 +449,7 @@ def save_settings(show_confirmation: bool = True):
 
     # --- Start of actual logic (replacing the placeholder above) ---
     # Access global variables defined within the main process block
-    global settings_vars, current_settings, DEFAULT_SETTINGS, CONFIG_FILE_PATH
-
+    global settings_vars, current_settings, DEFAULT_SETTINGS, CONFIG_FILE_PATH, orpheus_instance
     print("[Save Settings] Starting load-merge-save process...")
 
     # --- 1. Load Existing Settings File ---
@@ -462,7 +462,7 @@ def save_settings(show_confirmation: bool = True):
             print(f"[Save Settings] No existing settings file found at {CONFIG_FILE_PATH}. Will create a new one.")
             existing_settings = { "global": {"general": {},"formatting": {},"codecs": {},"covers": {},"playlist": {},"advanced": {},"module_defaults": {},"artist_downloading": {},"lyrics": {}}, "modules": {} }
     except (json.JSONDecodeError, IOError) as e:
-        error_message = f"Error loading existing settings file '{CONFIG_FILE_PATH}':\n{type(e).__name__}: {e}. Cannot proceed with save."
+        error_message = f"Error loading existing settings file '{CONFIG_FILE_PATH}':\\n{type(e).__name__}: {e}. Cannot proceed with save."
         print(f"[Save Settings] {error_message}", exc_info=True)
         show_centered_messagebox("Settings Error", error_message, dialog_type="error")
         return False
@@ -559,10 +559,7 @@ def save_settings(show_confirmation: bool = True):
 
         # --- 8. Re-initialize Orpheus instance AFTER successful save ---
         print("[Save Settings] Re-initializing Orpheus instance with updated settings...")
-        # Access the global instance
-        global orpheus_instance
         orpheus_instance = None # Clear the existing instance
-        # Call initialize_orpheus() which now handles passing DATA_DIR
         initialize_orpheus()
         print("[Save Settings] Orpheus instance re-initialized.")
 
@@ -573,9 +570,43 @@ def save_settings(show_confirmation: bool = True):
         return True # Indicate success
 
     except IOError as e:
-         error_message = f"Error writing settings file '{CONFIG_FILE_PATH}':\n{type(e).__name__}: {e}"; print(f"[Save Settings] {error_message}", exc_info=True); show_centered_messagebox("Settings Error", error_message, dialog_type="error"); return False
+        # <<< Logging for IOError >>>
+        log_file_path = os.path.join(os.getcwd(), 'error_log.txt')
+        error_message = f"Error writing settings file '{CONFIG_FILE_PATH}':\\n{type(e).__name__}: {e}"
+        full_traceback = traceback.format_exc()
+        print(f"[Save Settings] {error_message}", exc_info=False) # Avoid double printing traceback
+        try:
+            with open(log_file_path, 'a', encoding='utf-8') as log_f:
+                log_f.write(f"--- Error during settings save (IOError) ---\\n")
+                log_f.write(f"{error_message}\\n")
+                log_f.write(f"Full Traceback:\\n{full_traceback}\\n")
+                log_f.write("---------------------------------------------\\n")
+            error_message_for_dialog = f"{error_message}\\n\\nSee 'error_log.txt' in the application folder for details."
+        except Exception as log_e:
+            print(f"[Save Settings] CRITICAL: Failed to write to error log file: {log_e}")
+            error_message_for_dialog = f"{error_message}\\n\\n(Failed to write details to error_log.txt)"
+        # <<< Use modified error message >>>
+        show_centered_messagebox("Settings Error", error_message_for_dialog, dialog_type="error")
+        return False
     except Exception as e:
-        error_message = f"Unexpected error saving settings:\n{type(e).__name__}: {e}"; print(f"[Save Settings] {error_message}", exc_info=True); show_centered_messagebox("Settings Error", error_message, dialog_type="error"); return False
+        # <<< Logging for general Exception >>>
+        log_file_path = os.path.join(os.getcwd(), 'error_log.txt')
+        error_message = f"Unexpected error saving settings:\\n{type(e).__name__}: {e}"
+        full_traceback = traceback.format_exc()
+        print(f"[Save Settings] {error_message}", exc_info=False) # Avoid double printing traceback
+        try:
+            with open(log_file_path, 'a', encoding='utf-8') as log_f:
+                log_f.write(f"--- Error during settings save (Exception) ---\\n")
+                log_f.write(f"{error_message}\\n")
+                log_f.write(f"Full Traceback:\\n{full_traceback}\\n")
+                log_f.write("----------------------------------------------\\n")
+            error_message_for_dialog = f"{error_message}\\n\\nSee 'error_log.txt' in the application folder for details."
+        except Exception as log_e:
+            print(f"[Save Settings] CRITICAL: Failed to write to error log file: {log_e}")
+            error_message_for_dialog = f"{error_message}\\n\\n(Failed to write details to error_log.txt)"
+        # <<< Use modified error message >>>
+        show_centered_messagebox("Settings Error", error_message_for_dialog, dialog_type="error")
+        return False
     # --- End of actual logic ---
 
 def handle_save_settings():
