@@ -2500,13 +2500,20 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
             current_platform = platform.system() # <-- Added
             print(f"[DEBUG AboutIcon] Platform detected: {current_platform}") # <-- Added
 
-            # <<< Platform-specific icon filename for About tab >>>
+            # <<< Platform-specific icon filename and size for About tab >>>
             if current_platform == "Linux": # <-- Check against variable
                 icon_filename = "icon.png" # Use PNG on Linux
+                icon_display_size = (48, 48) # Default size
+                print(f"[DEBUG AboutIcon] Set Linux display size to {icon_display_size}")
             elif current_platform == "Darwin": # <-- Check against variable
                 icon_filename = "icon.icns"
-            else:
+                icon_display_size = (72, 72) # 1.5x size for macOS
+                print(f"[DEBUG AboutIcon] Set macOS display size to {icon_display_size}")
+            else: # Default to Windows/Other
                 icon_filename = "icon.ico" # Default to ICO for Windows/Other
+                icon_display_size = (48, 48) # Default size
+                print(f"[DEBUG AboutIcon] Set default display size to {icon_display_size}")
+
             print(f"[DEBUG AboutIcon] Determined icon filename: {icon_filename}") # <-- Added
 
             # Use resource_path to find the icon, works for dev and bundle
@@ -2517,8 +2524,7 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
             icon_exists = os.path.exists(icon_path) # <-- Added
             print(f"[DEBUG AboutIcon] Does icon exist at path? {icon_exists}") # <-- Added
 
-            # <<< Define icon_display_size BEFORE using it >>>
-            icon_display_size = (48, 48) # Default size for the About tab icon
+            # <<< icon_display_size is now defined based on platform BEFORE usage >>>
 
             if icon_path and icon_exists: # <-- Check variable
                 # ... (existing size calculation logic) ...
