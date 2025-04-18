@@ -2120,17 +2120,56 @@ if __name__ == "__main__":
                 "advanced": { "advanced_login_system": False, "codec_conversions": { "alac": "flac", "wav": "flac" }, "conversion_flags": { "flac": { "compression_level": "5" } }, "conversion_keep_original": False, "cover_variance_threshold": 8, "debug_mode": False, "disable_subscription_checks": False, "enable_undesirable_conversions": False, "ignore_existing_files": False, "ignore_different_artists": True }
             },
             "credentials": {
+                # <<< ADDED AppleMusic ENTRY >>>
+                "AppleMusic": {
+                    "get_original_cover": True,
+                    "print_original_cover_url": False,
+                    "lyrics_type": "standard",
+                    "lyrics_custom_ms_sync": False,
+                    "lyrics_language_override": "",
+                    "lyrics_syllable_sync": False,
+                    "email": "",
+                    "password": "",
+                    "force_region": "",
+                    "selected_language": "en"
+                },
                 "Tidal": { "tv_atmos_token": "", "tv_atmos_secret": "", "mobile_atmos_hires_token": "", "mobile_hires_token": "", "enable_mobile": True, "prefer_ac4": False, "fix_mqa": True },
                 "Qobuz": { "app_id": "", "app_secret": "", "quality_format": "{sample_rate}kHz {bit_depth}bit", "username": "", "password": "" },
                 "Deezer": { "client_id": "", "client_secret": "", "bf_secret": "", "email": "", "password": "" },
                 "SoundCloud": { "web_access_token": "" },
-                "Napster": { "api_key": "", "customer_secret": "", "requested_netloc": "", "username": "", "password": "" },
+                "Napster": {
+                    "api_key": "",
+                    "customer_secret": "",
+                    "requested_netloc": "",
+                    "username": "",
+                    "password": ""
+                },
                 "Beatport": { "username": "", "password": "" },
-                "BugsMusic": { "username": "", "password": "" },
-                "Idagio": { "username": "", "password": "" },
-                "KKBOX": { "kc1_key": "", "secret_key": "", "email": "", "password": "" },
-                "Nugs": { "username": "", "password": "", "client_id": "", "dev_key": "" },
-                "Musixmatch": { "token_limit": 10, "lyrics_format": "standard", "custom_time_decimals": False }
+                "BugsMusic": {
+                    "username": "",
+                    "password": ""
+                },
+                "Idagio": {
+                    "username": "",
+                    "password": ""
+                },
+                "KKBOX": {
+                    "kc1_key": "",
+                    "secret_key": "",
+                    "email": "",
+                    "password": ""
+                },
+                "Nugs": {
+                    "username": "",
+                    "password": "",
+                    "client_id": "", # Default empty, user provided example values
+                    "dev_key": ""      # Default empty, user provided example values
+                },
+                "Musixmatch": {
+                    "token_limit": 10,
+                    "lyrics_format": "standard",
+                    "custom_time_decimals": False
+                }
             }
         }
 
@@ -2506,11 +2545,20 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
         installed_platform_names = []
         if orpheus_instance and hasattr(orpheus_instance, 'module_settings') and hasattr(orpheus_instance, 'load_module'):
             known_module_names = list(orpheus_instance.module_settings.keys())
+            # <<< ADDED MAPPING FOR applemusic -> AppleMusic >>>
             platform_map_from_orpheus = {
-                "bugs": "BugsMusic", "nugs": "Nugs", "soundcloud": "SoundCloud",
-                "tidal": "Tidal", "qobuz": "Qobuz", "deezer": "Deezer",
-                "idagio": "Idagio", "kkbox": "KKBOX", "napster": "Napster",
-                "beatport": "Beatport", "musixmatch": "Musixmatch"
+                "applemusic": "AppleMusic",
+                "bugs": "BugsMusic",
+                "nugs": "Nugs",
+                "soundcloud": "SoundCloud",
+                "tidal": "Tidal",
+                "qobuz": "Qobuz",
+                "deezer": "Deezer",
+                "idagio": "Idagio",
+                "kkbox": "KKBOX",
+                "napster": "Napster",
+                "beatport": "Beatport",
+                "musixmatch": "Musixmatch"
                 # Add other mappings if needed
             }
             print(f"[Settings Tabs] Checking known modules: {known_module_names}")
