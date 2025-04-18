@@ -102,6 +102,31 @@ def get_script_directory():
                 script_path = os.path.abspath(os.path.dirname(sys.argv[0]))
         return script_path
 
+# --- Resource Path Function for PyInstaller ---
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+        # print(f"[Resource Path] Running bundled, _MEIPASS: {base_path}") # Optional debug
+    except Exception:
+        # _MEIPASS not found, running in normal Python environment
+        try:
+             # Use the directory of the script file
+             base_path = os.path.dirname(os.path.abspath(__file__))
+             # print(f"[Resource Path] Running as script, using __file__: {base_path}") # Optional debug
+        except NameError:
+             # Fallback if __file__ is not defined (e.g., interactive, frozen but no _MEIPASS?)
+             base_path = os.path.abspath(".")
+             # print(f"[Resource Path] Running fallback, using cwd: {base_path}") # Optional debug
+        # Ensure the fallback path exists, otherwise use script directory as last resort
+        if not os.path.isdir(base_path):
+             base_path = get_script_directory() # Fallback to original method if others fail
+
+    final_path = os.path.join(base_path, relative_path)
+    # print(f"[Resource Path] Resolved '{relative_path}' to '{final_path}'") # Optional debug
+    return final_path
+
 # --- Ensure the script's directory is in sys.path for bundled apps ---
 # This needs to run early, before potentially importing local packages like 'orpheus'.
 _app_dir = get_script_directory()
@@ -2108,8 +2133,8 @@ if __name__ == "__main__":
         # Icon - Updated to check OS and look in root folder
         try:
             icon_filename = "icon.icns" if platform.system() == "Darwin" else "icon.ico"
-            # Use _SCRIPT_DIR which is defined within this block
-            icon_path = os.path.join(_SCRIPT_DIR, icon_filename)
+            # Use resource_path to find the icon, works for dev and bundle
+            icon_path = resource_path(icon_filename)
             print(f"Looking for main window icon at: {icon_path}")
             if os.path.exists(icon_path):
                 if platform.system() != "Darwin":
@@ -2473,8 +2498,8 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
         icon_title_frame.pack(pady=(0, 5)) # Reduced bottom padding from 15 to 5
         try:
             icon_filename = "icon.icns" if platform.system() == "Darwin" else "icon.ico"
-            # Use _SCRIPT_DIR defined in this block
-            icon_path = os.path.join(_SCRIPT_DIR, icon_filename)
+            # Use resource_path to find the icon, works for dev and bundle
+            icon_path = resource_path(icon_filename)
             print(f"Looking for AboutTab icon at: {icon_path}")
             if icon_path and os.path.exists(icon_path):
                 # <<< Platform-specific icon size >>>
