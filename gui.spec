@@ -9,6 +9,7 @@ a = Analysis(
     datas=[
         ('icon.ico', '.'),
         ('icon.icns', '.'),
+        ('icon.png', '.'),
         ('update_checker.py', '.'),
     ],
     hiddenimports=[
