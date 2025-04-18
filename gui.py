@@ -2517,6 +2517,9 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
             icon_exists = os.path.exists(icon_path) # <-- Added
             print(f"[DEBUG AboutIcon] Does icon exist at path? {icon_exists}") # <-- Added
 
+            # <<< Define icon_display_size BEFORE using it >>>
+            icon_display_size = (48, 48) # Default size for the About tab icon
+
             if icon_path and icon_exists: # <-- Check variable
                 # ... (existing size calculation logic) ...
 
