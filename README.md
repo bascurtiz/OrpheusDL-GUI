@@ -5,11 +5,12 @@
 
 ## How to install:
 
-1. Make sure you have OrpheusDL installed already, see YouTube video: [https://www.youtube.com/watch?v=AGsYTQuO7nk](https://www.youtube.com/watch?v=AGsYTQuO7nk)
+1. Make sure you have OrpheusDL installed already, see YouTube video:
+[https://www.youtube.com/watch?v=AGsYTQuO7nk](https://www.youtube.com/watch?v=AGsYTQuO7nk)
 
 ### For Windows/macOS:
 2. Download the compiled exe/app from the [Releases page](https://github.com/bascurtiz/OrpheusDL-GUI/releases).
-3. Place the downloaded file in the same folder where your `orpheus.py` is located.
+3. Unzip the downloaded file and place it in the same folder where your `orpheus.py` is located.
 
 ### For Linux (or if you prefer running from source):
 1. Clone this repository (`git clone https://github.com/bascurtiz/OrpheusDL-GUI.git`) or download the ZIP file.
