@@ -2497,7 +2497,14 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
         icon_title_frame = customtkinter.CTkFrame(about_frame, fg_color="transparent")
         icon_title_frame.pack(pady=(0, 5)) # Reduced bottom padding from 15 to 5
         try:
-            icon_filename = "icon.icns" if platform.system() == "Darwin" else "icon.ico"
+            # <<< Platform-specific icon filename for About tab >>>
+            if platform.system() == "Linux":
+                icon_filename = "icon.png" # Use PNG on Linux
+            elif platform.system() == "Darwin":
+                icon_filename = "icon.icns"
+            else:
+                icon_filename = "icon.ico" # Default to ICO for Windows/Other
+
             # Use resource_path to find the icon, works for dev and bundle
             icon_path = resource_path(icon_filename)
             print(f"Looking for AboutTab icon at: {icon_path}")
