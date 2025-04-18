@@ -1872,18 +1872,18 @@ def sort_results(column):
 # =============================================================================
 
 def _update_settings_tab_widgets():
+    """Refreshes ONLY the Global settings tab widgets from current_settings."""
     # Access global variables defined within the main process block
     global current_settings, settings_vars, path_var_main, DEFAULT_SETTINGS
-    print("Refreshing Settings tab UI from current_settings...")
+    print("Refreshing Global Settings tab UI from current_settings...")
     try:
-        # Globals
-        for key, var in settings_vars.get("globals", {}).items(): # Reverted loop iteration
+        # Globals ONLY
+        for key, var in settings_vars.get("globals", {}).items():
             # <<< ADDED CHECK TO SKIP SPECIFIC ADVANCED SETTINGS >>>
             if key in ["advanced.codec_conversions", "advanced.conversion_flags"]:
                 continue
 
             if not isinstance(var, tkinter.Variable):
-                 # Skip if the structure is unexpected (e.g., complex dict placeholder)
                  if isinstance(var, dict) and not var: # Check for empty dict placeholder
                      pass
                  else:
@@ -1896,60 +1896,115 @@ def _update_settings_tab_widgets():
             value_from_dict = temp_dict if valid_path else None
             if value_from_dict is not None:
                 try:
-                    # Wrap var.set() in try...except
                     if isinstance(var, tkinter.BooleanVar):
                         var.set(bool(value_from_dict))
                     else:
                         var.set(str(value_from_dict))
                 except tkinter.TclError as e_set:
-                    if "invalid command name" in str(e_set):
-                        # print(f"[TclError Suppressed] Setting variable for {key}: {e_set}")
-                        pass # Suppress specific TclError
-                    else:
-                        print(f"Error setting variable for {key}: {e_set}") # Print/log other errors
+                    if "invalid command name" in str(e_set): pass
+                    else: print(f"Error setting variable for {key}: {e_set}")
                 except Exception as e_set_other:
                     print(f"Error setting variable for {key}: {e_set_other}")
 
-        # Credentials
-        if 'DEFAULT_SETTINGS' not in globals(): return
-        sorted_platforms = sorted(DEFAULT_SETTINGS["credentials"].keys())
-        for platform_name in sorted_platforms:
-            for field_key, var in settings_vars.get("credentials", {}).get(platform_name, {}).items(): # Reverted loop iteration
-                if not isinstance(var, tkinter.Variable):
-                     continue # Skip unexpected structure
-
-                value_from_dict = current_settings.get("credentials", {}).get(platform_name, {}).get(field_key)
-                if value_from_dict is not None:
-                    try:
-                         # Wrap var.set() in try...except
-                         var.set(str(value_from_dict))
-                    except tkinter.TclError as e_set_cred:
-                        if "invalid command name" in str(e_set_cred):
-                            # print(f"[TclError Suppressed] Setting variable for {platform_name}.{field_key}: {e_set_cred}")
-                            pass # Suppress specific TclError
-                        else:
-                            print(f"Error setting variable for {platform_name}.{field_key}: {e_set_cred}")
-                    except Exception as e_set_cred_other:
-                        print(f"Error setting variable for {platform_name}.{field_key}: {e_set_cred_other}")
-
-        # Main Path
-        if 'path_var_main' in globals() and isinstance(path_var_main, tkinter.Variable):
+        # Main Path (Handled as part of Globals now if 'general.output_path' is in settings_vars['globals'])
+        # Check explicitly if path_var_main needs separate handling if it's NOT in settings_vars['globals']
+        if 'path_var_main' in globals() and isinstance(path_var_main, tkinter.Variable) and "general.output_path" not in settings_vars.get("globals", {}):
              main_path_val = current_settings.get("globals", {}).get("general", {}).get("output_path")
              if main_path_val is not None:
-                  try:
-                      # Wrap path_var_main.set() in try...except
-                      path_var_main.set(main_path_val)
+                  try: path_var_main.set(main_path_val)
                   except tkinter.TclError as e_set_main:
-                      if "invalid command name" in str(e_set_main):
-                          # print(f"[TclError Suppressed] Setting main path variable: {e_set_main}")
-                          pass # Suppress specific TclError
-                      else:
-                          print(f"Error setting main path variable: {e_set_main}")
+                      if "invalid command name" in str(e_set_main): pass
+                      else: print(f"Error setting main path variable: {e_set_main}")
                   except Exception as e_set_main_other:
                       print(f"Error setting main path variable: {e_set_main_other}")
 
-        print("Settings tab UI refresh finished.")
-    except Exception as e: print(f"Error during settings UI refresh: {e}"); import traceback; traceback.print_exc()
+        print("Global Settings tab UI refresh finished.")
+    except Exception as e: print(f"Error during Global settings UI refresh: {e}"); import traceback; traceback.print_exc()
+
+# <<< NEW FUNCTION: Create content for a specific credential tab >>>
+def _create_credential_tab_content(platform_name, tab_frame):
+    """Creates the labels and entry fields for a given platform's credentials."""
+    # Access global variables defined within the main process block
+    global settings_vars, current_settings, DEFAULT_SETTINGS
+    print(f"Creating content for credential tab: {platform_name}")
+    try:
+        # Ensure necessary global structures exist
+        if 'settings_vars' not in globals() or 'credentials' not in settings_vars: settings_vars['credentials'] = {}
+        if platform_name not in settings_vars['credentials']: settings_vars['credentials'][platform_name] = {}
+
+        # Get default fields and current values
+        default_platform_fields = DEFAULT_SETTINGS.get("credentials", {}).get(platform_name, {})
+        current_platform_creds = current_settings.get("credentials", {}).get(platform_name, {})
+
+        tab_frame.grid_columnconfigure(1, weight=1) # Configure column weight for the frame
+        row = 0
+        for field_key, default_value in default_platform_fields.items():
+            # Get current value, falling back to default
+            current_value = current_platform_creds.get(field_key, default_value)
+
+            # Create/store Tkinter variable if it doesn't exist for this field yet
+            if field_key not in settings_vars['credentials'][platform_name]:
+                var = tkinter.StringVar(value=str(current_value))
+                settings_vars['credentials'][platform_name][field_key] = var
+            else:
+                # Variable already exists (e.g., from a previous load attempt?), just get it
+                var = settings_vars['credentials'][platform_name][field_key]
+                # Ensure its value reflects the latest current_settings
+                var.set(str(current_value))
+
+            # Create label
+            current_pady = (13 if row == 0 else 2, 2)
+            customtkinter.CTkLabel(tab_frame, text=f"{field_key.replace('_', ' ').title()}:").grid(row=row, column=0, sticky="w", padx=10, pady=current_pady)
+
+            # Create entry
+            entry = customtkinter.CTkEntry(tab_frame, textvariable=var)
+            entry.grid(row=row, column=1, sticky="ew", padx=10, pady=current_pady)
+            entry.bind("<Button-3>", show_context_menu)
+            entry.bind("<Button-2>", show_context_menu)
+            entry.bind("<Control-Button-1>", show_context_menu)
+            entry.bind("<FocusIn>", lambda e, w=entry: handle_focus_in(w))
+            entry.bind("<FocusOut>", lambda e, w=entry: handle_focus_out(w))
+            row += 1
+        print(f"Finished creating content for {platform_name}")
+    except Exception as e:
+        print(f"Error creating content for credential tab {platform_name}: {e}")
+        import traceback
+        traceback.print_exc()
+
+# <<< NEW FUNCTION: Handle settings tab changes for lazy loading >>>
+def _handle_settings_tab_change():
+    """Callback function when a tab in the settings_tabview is selected."""
+    # Access global variables defined within the main process block
+    global settings_tabview, credential_tab_frames, _created_credential_tabs
+    try:
+        selected_tab_name = settings_tabview.get() # Get the name of the currently selected tab
+        print(f"[Settings Tab Change] Selected: {selected_tab_name}")
+
+        # Check if it's a credential tab that hasn't been created yet
+        if selected_tab_name != "Global" and selected_tab_name not in _created_credential_tabs:
+            print(f"  -> Tab '{selected_tab_name}' needs content creation.")
+            # Map display name back to internal platform name (assuming they are the same for now)
+            # A more robust mapping might be needed if display names differ significantly
+            internal_platform_name = selected_tab_name.replace(" ", "_") # Simple mapping
+
+            # Find the corresponding frame
+            tab_frame = credential_tab_frames.get(selected_tab_name)
+
+            if tab_frame:
+                # Call the function to create the content within the frame
+                _create_credential_tab_content(internal_platform_name, tab_frame)
+                # Mark this tab as created
+                _created_credential_tabs.add(selected_tab_name)
+                print(f"  -> Content created and tab '{selected_tab_name}' marked as loaded.")
+            else:
+                print(f"[ERROR] Could not find frame for credential tab: {selected_tab_name}")
+        # else: # Optional: Log if tab is Global or already created
+            # print(f"  -> Tab '{selected_tab_name}' is Global or already loaded.")
+
+    except Exception as e:
+        print(f"Error handling settings tab change for '{selected_tab_name}': {e}")
+        import traceback
+        traceback.print_exc()
 
 # =============================================================================
 # --- 10. MAIN EXECUTION ---
@@ -2087,6 +2142,9 @@ if __name__ == "__main__":
         search_process_active = False
         download_process_active = False
         _last_message_was_empty = False # For log formatting
+        # <<< Globals for lazy loading settings tabs >>>
+        _created_credential_tabs = set() # Keep track of which credential tabs have content
+        credential_tab_frames = {}       # Store frames for credential tabs {display_name: frame}
 
         # --- Context Menu Globals ---
         _context_menu = None
@@ -2310,9 +2368,17 @@ if __name__ == "__main__":
         search_download_button = customtkinter.CTkButton(selection_controls_frame, text="Download", command=download_selected, width=100, height=30, state="disabled", fg_color="#343638", hover_color="#1F6AA5"); search_download_button.pack(side="left", padx=(5, 6))
 
         # --- Settings Tab ---
-        settings_tab = tabview.add("Settings"); settings_tabview = customtkinter.CTkTabview(master=settings_tab); settings_tabview.pack(expand=True, fill="both", padx=5, pady=5)
-        # Global Settings Sub-Tab
-        global_settings_tab = settings_tabview.add("Global"); global_settings_frame = customtkinter.CTkScrollableFrame(global_settings_tab); global_settings_frame.pack(expand=True, fill="both", padx=5, pady=(0, 5)); global_settings_frame.grid_columnconfigure(1, weight=1)
+        settings_tab = tabview.add("Settings")
+        # <<< Configure the main settings tabview to call handler on change >>>
+        settings_tabview = customtkinter.CTkTabview(master=settings_tab, command=_handle_settings_tab_change)
+        settings_tabview.pack(expand=True, fill="both", padx=5, pady=5)
+
+        # Global Settings Sub-Tab (Created Eagerly)
+        global_settings_tab = settings_tabview.add("Global")
+        global_settings_frame = customtkinter.CTkScrollableFrame(global_settings_tab)
+        # <<< ADDED BACK pack() and grid_columnconfigure() >>>
+        global_settings_frame.pack(expand=True, fill="both", padx=5, pady=(0, 5))
+        global_settings_frame.grid_columnconfigure(1, weight=1)
         row = 0
 
         # --- Tooltip Texts ---
@@ -2435,7 +2501,7 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
 
                     row += 1
 
-        # Credential Sub-Tabs
+        # Credential Sub-Tabs (Lazy Loading Setup)
         # Dynamically determine installed/loadable modules
         installed_platform_names = []
         if orpheus_instance and hasattr(orpheus_instance, 'module_settings') and hasattr(orpheus_instance, 'load_module'):
@@ -2471,22 +2537,17 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
             print("[Settings Tabs] Orpheus instance not available or modules cannot be listed. Skipping credential tabs.")
             sorted_installed_platforms = [] # Ensure it's an empty list if Orpheus isn't ready
 
-        # Use the dynamic list of installed platforms
+        # <<< Modified loop: Only add tabs and store frames, don't create content yet >>>
         for platform_name in sorted_installed_platforms:
-            # The rest of the loop remains largely the same, ensure defaults are still used for structure
-            # Note: We already confirmed platform_name is in DEFAULT_SETTINGS["credentials"] above
-            fields = current_settings.get("credentials", {}).get(platform_name, {}) # Get loaded or empty dict
-            default_platform_fields = DEFAULT_SETTINGS["credentials"].get(platform_name, {}) # Get defaults
+            # Map internal name to display name (e.g., "BugsMusic" -> "Bugs Music")
+            display_name = platform_name.replace("_", " ")
+            # Add the tab, getting the frame associated with it
+            platform_tab_frame = settings_tabview.add(display_name)
+            # Store the frame for later use by the handler
+            credential_tab_frames[display_name] = platform_tab_frame
+            print(f"  -> Added placeholder tab: {display_name}")
 
-            platform_tab = settings_tabview.add(platform_name.replace("_", " ")); settings_vars["credentials"][platform_name] = {}; platform_tab.grid_columnconfigure(1, weight=1); row = 0
-            for field_key, default_value in default_platform_fields.items():
-                current_value = fields.get(field_key, default_value); var = tkinter.StringVar(value=str(current_value)); settings_vars["credentials"][platform_name][field_key] = var # Store only var
-                current_pady = (13 if row == 0 else 2, 2); customtkinter.CTkLabel(platform_tab, text=f"{field_key.replace('_', ' ').title()}:").grid(row=row, column=0, sticky="w", padx=10, pady=current_pady)
-                entry = customtkinter.CTkEntry(platform_tab, textvariable=var); entry.grid(row=row, column=1, sticky="ew", padx=10, pady=current_pady); entry.bind("<Button-3>", show_context_menu); entry.bind("<Button-2>", show_context_menu); entry.bind("<Control-Button-1>", show_context_menu)
-                entry.bind("<FocusIn>", lambda e, w=entry: handle_focus_in(w))
-                entry.bind("<FocusOut>", lambda e, w=entry: handle_focus_out(w))
-                row += 1
-        # Save Controls Frame
+        # Save Controls Frame (Remains the same)
         save_controls_frame = customtkinter.CTkFrame(settings_tab, fg_color="transparent"); save_controls_frame.pack(side="bottom", anchor="se", padx=10, pady=(0, 10))
         save_status_var = tkinter.StringVar(); save_status_label = customtkinter.CTkLabel(save_controls_frame, textvariable=save_status_var, text_color=("green", "lightgreen")); save_status_label.pack(side="left", padx=(0, 10))
         save_button = customtkinter.CTkButton(save_controls_frame, text="Save", width=100, height=30, command=handle_save_settings, fg_color="#343638", hover_color="#1F6AA5"); save_button.pack(side="left", padx=5, pady=(0, 0))
@@ -2610,21 +2671,11 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
             print(f"[Error] Failed to start update check: {update_err}")
 
         # --- Explicitly update UI vars after main loop starts ---
+        # <<< Re-introduce _initial_ui_update definition >>>
         def _initial_ui_update():
             print("[DEBUG] Running _initial_ui_update...")
             try:
-                # Re-set main path variable
-                if 'path_var_main' in globals() and path_var_main:
-                    main_path_val = current_settings.get("globals", {}).get("general", {}).get("output_path")
-                    if main_path_val is not None:
-                        print(f"  -> Setting path_var_main to: {main_path_val}")
-                        path_var_main.set(main_path_val)
-                    else:
-                        print("  -> main_path_val is None")
-                else:
-                    print("  -> path_var_main not found")
-
-                # Refresh settings tab
+                # Refresh Global settings tab only
                 print("  -> Calling _update_settings_tab_widgets()")
                 _update_settings_tab_widgets()
                 print("[DEBUG] _initial_ui_update finished.")
@@ -2632,7 +2683,7 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
             except Exception as e_init_update:
                  print(f"[Error] in _initial_ui_update: {e_init_update}")
 
-        app.after(10, _initial_ui_update) # Schedule the update shortly after start
+        _initial_ui_update() # Call directly
 
         app.mainloop() # Start the Tkinter event loop
 
