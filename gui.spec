@@ -33,6 +33,7 @@ a = Analysis(
         'mutagen',
         'os',
         'PIL',
+        'PIL._tkinter_finder',
         'platform',
         'requests',
         'six',
