@@ -1995,7 +1995,7 @@ if __name__ == "__main__":
             print(f"[CWD] Warning: Failed to change working directory: {e_chdir}")
 
         CONFIG_DIR = os.path.join(_SCRIPT_DIR, 'config')
-        DATA_DIR = os.path.join(_SCRIPT_DIR, 'data') # <<< Define DATA_DIR
+        # DATA_DIR = os.path.join(_SCRIPT_DIR, 'data') # <<< Removed
         MODULES_DIR = os.path.join(_SCRIPT_DIR, 'modules') # <<< Define MODULES_DIR
         CONFIG_FILE_NAME = 'settings.json'
         CONFIG_FILE_PATH = os.path.join(CONFIG_DIR, CONFIG_FILE_NAME)
@@ -2013,10 +2013,10 @@ if __name__ == "__main__":
         # --- Create necessary directories ---
         try:
             os.makedirs(CONFIG_DIR, exist_ok=True)
-            os.makedirs(DATA_DIR, exist_ok=True)
+            # os.makedirs(DATA_DIR, exist_ok=True) # <<< Removed
             os.makedirs(MODULES_DIR, exist_ok=True)
             print(f"[Init] Ensured config directory exists: {CONFIG_DIR}")
-            print(f"[Init] Ensured data directory exists: {DATA_DIR}")
+            # print(f"[Init] Ensured data directory exists: {DATA_DIR}") # <<< Removed
             print(f"[Init] Ensured modules directory exists: {MODULES_DIR}")
         except OSError as e:
             print(f"[Error] Could not create config/data/modules directories: {e}")
