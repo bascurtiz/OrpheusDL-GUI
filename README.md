@@ -11,6 +11,7 @@
 ### For Windows/macOS:
 2. Download the compiled exe/app from the [Releases page](https://github.com/bascurtiz/OrpheusDL-GUI/releases).
 3. Unzip the downloaded file and place it in the same folder where your `orpheus.py` is located.
+4. Double-click OrpheusDL_GUI (or make a shortcut to desktop)
 
 ### For Linux (or if you prefer running from source):
 1. Clone this repository (`git clone https://github.com/bascurtiz/OrpheusDL-GUI.git`) or download the ZIP file.
