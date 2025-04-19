@@ -46,7 +46,11 @@ a = Analysis(
         'urllib3',
         'uuid',
         'wave',
-        'webbrowser'
+        'webbrowser',
+        'xmltodict',
+        'pbkdf2',
+        'srp',
+        'pytz'
     ],
     excludes=['torch', 'cuda', 'pytorch', 'matplotlib', 'pandas', 'numpy'],
     hookspath=[],
