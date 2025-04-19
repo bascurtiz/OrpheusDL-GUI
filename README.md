@@ -1,7 +1,7 @@
 # OrpheusDL GUI
 
 ## Trailer
-(coming soon)
+[img]https://i.imgur.com/CxG3Bkw.png(https://www.youtube.com/watch?v=RAXsW67SjGU)[/img]
 
 ## How to install:
 
