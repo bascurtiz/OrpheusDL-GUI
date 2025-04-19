@@ -649,22 +649,43 @@ def _auto_save_path_change(*args):
     """Callback triggered when path_var_main changes. Updates in-memory setting AND saves to file."""
     # Access global variables defined within the main process block
     global current_settings, path_var_main, settings_vars, save_status_var, app
+    # <<<< START TRY BLOCK >>>>
     try:
         # Ensure path_var_main exists
         if 'path_var_main' not in globals() or not path_var_main: return
 
         new_path = path_var_main.get()
-        current_path = current_settings.get("globals", {}).get("general", {}).get("output_path")
+        # <<< Modified to avoid unnecessary reads/checks if new_path is empty >>>
+        if not new_path:
+            print("[Auto Save Path] UI path cleared. No save triggered.")
+            return # Don't proceed if the path is empty
 
-        if new_path != current_path:
-            print(f"Download path changed in UI: {new_path}. Updating in-memory setting.")
+        current_path_in_memory = current_settings.get("globals", {}).get("general", {}).get("output_path")
+
+        # Check against the actual Tkinter var in settings_vars as well
+        settings_tab_var = settings_vars.get("globals", {}).get("general.output_path")
+        current_path_in_settings_tab = settings_tab_var.get() if settings_tab_var else None
+
+        # Trigger save only if the UI path is different from BOTH in-memory and settings tab
+        # Or if the settings tab var doesn't exist yet (initial load case)
+        should_save = False
+        if new_path != current_path_in_memory:
+            should_save = True
+        elif settings_tab_var and new_path != current_path_in_settings_tab:
+            should_save = True
+        elif not settings_tab_var:
+            # If the settings tab var hasn't been created yet, assume we might need to save
+            should_save = True 
+
+        if should_save:
+            print(f"[Auto Save Path] Path changed in UI: {new_path}. Updating...")
             if "globals" not in current_settings: current_settings["globals"] = {}
             if "general" not in current_settings["globals"]: current_settings["globals"]["general"] = {}
             current_settings["globals"]["general"]["output_path"] = new_path
 
-            # Update the settings tab UI (check if var exists)
-            if "globals" in settings_vars and "general.output_path" in settings_vars["globals"] and settings_vars["globals"]["general.output_path"]:
-                settings_vars["globals"]["general.output_path"].set(new_path)
+            # Update the settings tab UI if var exists
+            if settings_tab_var:
+                settings_tab_var.set(new_path)
 
             # <<< Call save_settings without confirmation >>>
             print(f"[Auto Save Path] Triggering automatic save for path: {new_path}")
@@ -673,20 +694,43 @@ def _auto_save_path_change(*args):
 
             # Update status label (check if exists)
             if 'save_status_var' in globals() and save_status_var:
-                if save_successful:
-                    save_status_var.set("Path saved.")
-                else:
-                    save_status_var.set("Auto-save failed!")
+                status_msg = "Path saved." if save_successful else "Auto-save failed!"
+                save_status_var.set(status_msg)
                 # Ensure app exists before scheduling clear
                 if 'app' in globals() and app and app.winfo_exists():
-                    app.after(3000, lambda: save_status_var.set("") if save_status_var else None)
-
+                    # Use a more robust lambda for clearing the status
+                    app.after(3000, lambda var=save_status_var, msg=status_msg: var.set("") if var and var.get() == msg else None)
+        else:
+            print(f"[Auto Save Path] Path '{new_path}' matches existing settings. No save triggered.")
+    # <<<< START EXCEPT BLOCK >>>>
     except Exception as e:
-        print(f"Error in _auto_save_path_change: {e}")
+        # <<< Logging for general Exception in auto-save handler >>>
+        log_file_path = os.path.join(os.getcwd(), 'error_log.txt')
+        err_msg = f"Error during automatic path save handling:\\n{type(e).__name__}: {e}"
+        full_traceback = traceback.format_exc()
+        print(f"[Auto Save Path] Error: {err_msg}", exc_info=False) # Avoid double printing traceback
+
+        try:
+            with open(log_file_path, 'a', encoding='utf-8') as log_f:
+                log_f.write(f"--- Error during _auto_save_path_change ---\\n")
+                log_f.write(f"{err_msg}\\n")
+                log_f.write(f"Full Traceback:\\n{full_traceback}\\n")
+                log_f.write("--------------------------------------------\\n")
+            error_message_for_dialog = f"{err_msg}\\n\\nSee 'error_log.txt' in the application folder for details."
+        except Exception as log_e:
+            print(f"[Auto Save Path] CRITICAL: Failed to write to error log file: {log_e}")
+            error_message_for_dialog = f"{err_msg}\\n\\n(Failed to write details to error_log.txt)"
+
+        # Update status label if possible
         if 'save_status_var' in globals() and save_status_var:
-             save_status_var.set("Error saving path!")
-             if 'app' in globals() and app and app.winfo_exists():
-                  app.after(3000, lambda: save_status_var.set("") if save_status_var else None)
+            save_status_var.set("Error during auto-save!")
+            if 'app' in globals() and app and app.winfo_exists():
+                 app.after(4000, lambda var=save_status_var: var.set("") if var else None)
+
+        # Show the error message box
+        # Use the title you observed if it helps identification
+        dialog_title = "Initialization Error" if "Initialization" in str(e) else "Auto-Save Error"
+        show_centered_messagebox(dialog_title, error_message_for_dialog, dialog_type="error")
 
 # =============================================================================
 # --- 6. GUI HELPER FUNCTIONS ---
