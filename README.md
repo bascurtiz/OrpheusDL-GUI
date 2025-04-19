@@ -1,12 +1,12 @@
 # OrpheusDL GUI
 
 ## Trailer
-[img]https://i.imgur.com/CxG3Bkw.png(https://www.youtube.com/watch?v=RAXsW67SjGU)[/img]
+[![Watch the video](https://i.imgur.com/CxG3Bkw.png)]((https://youtu.be/AGsYTQuO7nk))
 
 ## How to install:
 
 1. Make sure you have OrpheusDL installed already, see YouTube video:
-[![Watch the video](https://i.imgur.com/CxG3Bkw.png)]((https://youtu.be/AGsYTQuO7nk))
+https://youtu.be/AGsYTQuO7nk
 
 
 ### Windows/macOS:
