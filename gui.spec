@@ -68,31 +68,32 @@ pyz = PYZ(
     cipher=block_cipher
 )
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
-    name='OrpheusDL_GUI',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon='icon.icns',
-)
-
-# --- macOS App Bundle Definition ---
+# Use EXE normally unless on macOS (Darwin), where we avoid onefile
 if platform.system() == 'Darwin':
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        [],
+        name='OrpheusDL_GUI',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon='icon.icns',
+        onefile=False  # <<< added this
+    )
+
     app = BUNDLE(
         exe,
         name='OrpheusDL_GUI.app',
@@ -103,4 +104,27 @@ if platform.system() == 'Darwin':
             'NSRequiresAquaSystemAppearance': 'False'
         }
     )
-
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        [],
+        name='OrpheusDL_GUI',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon='icon.ico',
+        # this will default to onefile, or add `onefile=True` explicitly
+    )

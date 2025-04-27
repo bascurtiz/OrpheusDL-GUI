@@ -41,8 +41,12 @@ from tqdm import tqdm
 from urllib.parse import urlparse
 import traceback # Add near other imports if not present
 
+# --- Global Download Queue ---
+file_download_queue = []
+current_batch_output_path = None
+
 # Application Version
-__version__ = "1.0.1" # <<< Add version here
+__version__ = "1.0.2" # <<< Add version here
 
 # --- Import Update Checker ---
 from update_checker import run_check_in_thread # <<< Import the checker function
@@ -1126,11 +1130,11 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
     try:
         sys.stdout = queue_writer
         sys.stderr = queue_writer
-        print("[INIT] Starting download thread setup...")
+        # print("[INIT] Starting download thread setup...") # <<< Commented out
         # Ensure 'temp' directory exists relative to script/executable
         temp_dir = os.path.join(get_script_directory(), 'temp')
         os.makedirs(temp_dir, exist_ok=True)
-        print(f"[INIT] Ensured temp directory exists: {temp_dir}")
+        # print(f"[INIT] Ensured temp directory exists: {temp_dir}") # <<< Commented out
 
         # Prepare Downloader settings
         downloader_settings = {
@@ -1390,67 +1394,83 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
 
         download_successful = not is_cancelled and not download_exception_occurred # <<< Determine success
 
-        def final_ui_update(success=False): # <<< Added success parameter
-            # Access global widgets defined in main process block
-            global download_process_active, download_button, progress_bar, stop_button, winsound # Add winsound to globals access
+        # --- Function to update UI and potentially start next download ---
+        def final_ui_update(success=False):
+            # Access global widgets/state needed for UI update and queue check
+            global progress_bar, stop_button, download_process_active, app, file_download_queue, current_batch_output_path, current_settings, DEFAULT_SETTINGS
+
             try:
-                # Check if widgets exist before configuring
-                if 'download_button' in globals() and download_button and download_button.winfo_exists():
-                    download_button.configure(state="normal")
-                if 'progress_bar' in globals() and progress_bar and progress_bar.winfo_exists():
-                    progress_bar.stop(); progress_bar.set(0)
-                if 'stop_button' in globals() and stop_button and stop_button.winfo_exists():
-                    stop_button.configure(state="disabled")
-                download_process_active = False # Reset flag
+                # Reset UI elements (ProgressBar, Stop Button) that apply to the finished download
+                if 'progress_bar' in globals() and progress_bar and progress_bar.winfo_exists(): progress_bar.set(0)
+                if 'stop_button' in globals() and stop_button and stop_button.winfo_exists(): stop_button.configure(state=tkinter.DISABLED)
 
-                # <<< Play platform-specific sound based on success/failure >>>
-                current_platform = platform.system()
-                sound_played = False # Flag to track if sound was attempted
+                # Mark download as inactive *before* checking queue
+                download_process_active = False
 
-                if current_platform == "Darwin":
+                # --- Check file download queue --- 
+                if file_download_queue: # If items remain in the queue...
+                    next_url = file_download_queue.pop(0) # Get and remove next URL
+                    print(f"Queueing next download from file: {next_url} ({len(file_download_queue)} remaining)")
+                    # Use app.after to schedule the next download attempt
+                    if 'app' in globals() and app and app.winfo_exists() and current_batch_output_path:
+                        app.after(100, lambda u=next_url, p=current_batch_output_path: _start_single_download(u, p, None))
+                        # DO NOT play sound here - batch is not finished
+                    else:
+                        print("[Error] Cannot queue next download: App not available or batch path missing.")
+                        set_ui_state_downloading(False) # Reset UI if queue fails
+                        file_download_queue.clear()
+                        current_batch_output_path = None
+                        # No sound here either, as the batch failed mid-way
+                else:
+                    # --- Queue is empty: Reset UI and handle final sound --- 
+                    set_ui_state_downloading(False) # Reset UI state now
+                    is_batch_finish = (current_batch_output_path is not None)
+
+                    if is_batch_finish:
+                         print("File download queue is empty. Batch finished.")
+                         current_batch_output_path = None # Clear batch path *after* using the flag
+
+                    # --- Play sound logic (only if batch just finished OR it was a single non-batch download) ---
+                    play_sound = False
                     try:
-                        success_sound = "/System/Library/Sounds/Glass.aiff"
-                        failure_sound = "/System/Library/Sounds/Sosumi.aiff" # Common macOS alert sound
-                        sound_to_play = success_sound if success else failure_sound
-                        status_text = "completion" if success else "failure/cancellation"
+                        play_sound = current_settings.get("globals", {}).get("general", {}).get("play_sound_on_finish", DEFAULT_SETTINGS["globals"]["general"]["play_sound_on_finish"])
+                    except Exception as setting_e: print(f"[Sound] Error reading play_sound setting: {setting_e}")
 
-                        if os.path.exists(sound_to_play):
-                            subprocess.run(["afplay", sound_to_play], check=False, capture_output=True)
-                            print(f"[Sound] Played download {status_text} sound (macOS).")
-                            sound_played = True
-                        else:
-                            print(f"[Sound] Warning: Sound file not found: {sound_to_play}")
-                    except Exception as sound_e:
-                        print(f"[Sound] Error playing sound (macOS): {sound_e}")
-
-                elif current_platform == "Windows":
-                    # Check if winsound was imported successfully (using the global variable)
-                    if winsound:
+                    if play_sound:
+                        sound_played = False
                         try:
-                            success_alias = "SystemAsterisk"
-                            failure_alias = "SystemHand" # Common Windows error/stop sound
-                            sound_alias_to_play = success_alias if success else failure_alias
-                            status_text = "completion" if success else "failure/cancellation"
+                            current_platform = platform.system()
+                            # Use explicit check for winsound module existence
+                            sound_module_available = (current_platform == "Windows" and 'winsound' in sys.modules)
 
-                            # SND_ALIAS: Play system sound alias, SND_ASYNC: Play asynchronously
-                            winsound.PlaySound(sound_alias_to_play, winsound.SND_ALIAS | winsound.SND_ASYNC)
-                            print(f"[Sound] Played download {status_text} sound (Windows).")
-                            sound_played = True
-                        except RuntimeError as sound_e: # Catches errors like sound device unavailable
-                            print(f"[Sound] Error playing sound (Windows): {sound_e}")
+                            if sound_module_available:
+                                sound_alias_to_play = "SystemAsterisk" if success else "SystemHand"
+                                winsound.PlaySound(sound_alias_to_play, winsound.SND_ALIAS | winsound.SND_ASYNC)
+                                sound_played = True
+                            elif current_platform == "Darwin":
+                                sound_file = "/System/Library/Sounds/Glass.aiff" if success else "/System/Library/Sounds/Sosumi.aiff"
+                                if os.path.exists(sound_file):
+                                    subprocess.run(["afplay", sound_file], check=False, capture_output=True)
+                                    sound_played = True
+                                
+                            if sound_played:
+                                status_text = "completion" if success else "failure/cancellation"
+                                finish_context = "Batch" if is_batch_finish else "Download"
+                                print(f"[Sound] Played {finish_context} {status_text} sound ({current_platform}).")
+                        except NameError: # Handle case where winsound wasn't imported (e.g., non-Windows)
+                            print("[Sound] Sound playback skipped (winsound not available on this platform).")
                         except Exception as sound_e:
-                             print(f"[Sound] Unexpected error playing sound (Windows): {sound_e}")
-                    # else: # winsound was not imported, message already printed at startup
-                    #    pass
+                            print(f"[Warning] Could not play completion/failure sound: {sound_e}")
 
-                if not sound_played:
-                    print("[Sound] No sound played for download result.")
-
-            except NameError: print("[Debug] UI element(s) not found in final_ui_update.")
-            except tkinter.TclError as e: print(f"TclError in final UI update (widget destroyed?): {e}")
-            except Exception as ui_update_e: print(f"[Error] Exception during final UI update: {ui_update_e}")
-            finally:
-                 download_process_active = False # Ensure flag is reset even on error
+            except NameError as final_ne:
+                print(f"[Error] NameError during final UI update (widget missing?): {final_ne}")
+                download_process_active = False; set_ui_state_downloading(False)
+            except tkinter.TclError as final_tcl_e:
+                 print(f"[Error] TclError during final UI update (widget destroyed?): {final_tcl_e}")
+                 download_process_active = False
+            except Exception as final_e:
+                 print(f"[Error] Exception scheduling final UI update: {final_e}")
+                 download_process_active = False; set_ui_state_downloading(False)
 
         try:
             # Ensure app exists before scheduling update
@@ -1463,11 +1483,70 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         except Exception as final_e:
              print(f"[Error] Exception scheduling final UI update: {final_e}")
 
-# --- Start Download Thread ---
+# --- Start Download Thread Helper (for single URL) ---
+def _start_single_download(url_to_download, output_path_final, search_result_data=None):
+    """Starts the download thread for a single validated URL."""
+    global download_process_active, current_settings, orpheus_instance, stop_event # Keep necessary globals
+
+    # Do not proceed if Orpheus is not ready
+    if orpheus_instance is None:
+        # Error message shown by caller (start_download_thread) or previous final_ui_update
+        print("Download cancelled: Orpheus instance is None.")
+        # Attempt to show message box if app exists
+        try:
+            if 'app' in globals() and app and app.winfo_exists():
+                 show_centered_messagebox("Error", "Orpheus library not initialized.", dialog_type="error")
+        except Exception: pass # Ignore errors showing messagebox here
+        return False # Indicate failure
+
+    # Check if a download is *already* running before starting a new one
+    if download_process_active:
+        print(f"Skipping start for {url_to_download}: A download is currently active.")
+        # Re-queue if this was from the file queue?
+        # For now, let's just skip. The queue logic in final_ui_update should prevent overlap.
+        return False # Indicate failure to start now
+
+    # Basic URL validation
+    try:
+        parsed_url = urlparse(url_to_download)
+        if not parsed_url.scheme in ['http', 'https'] or not parsed_url.netloc:
+            # <<< Updated error message >>>
+            show_centered_messagebox("Invalid Input", f"Input is not a valid URL or file path.\nPlease enter a valid web URL (http:// or https://) or the full path to a .txt file.", dialog_type="warning")
+            return False # Indicate failure
+    except Exception as parse_e:
+        # This error is for when urlparse itself fails, less common for typical invalid input
+        show_centered_messagebox("Input Error", f"Could not process input: {url_to_download}\nError: {parse_e}\nPlease enter a valid web URL or .txt file path.", dialog_type="error")
+        return False # Indicate failure
+
+    # Path validation is done in the caller (start_download_thread) before the first call
+
+    # Start the actual download thread
+    try:
+        set_ui_state_downloading(True) # Set UI busy
+        stop_event.clear() # Ensure stop flag is clear for this new download
+        download_process_active = True # Mark as active
+
+        download_thread = threading.Thread(target=run_download_in_thread,
+                                           args=(orpheus_instance, url_to_download, output_path_final, current_settings, search_result_data),
+                                           daemon=True)
+        print(f"Starting download thread for: {url_to_download}")
+        download_thread.start()
+        return True # Indicate success
+
+    except Exception as e:
+        print(f"Unexpected error starting download thread for {url_to_download}: {e}")
+        show_centered_messagebox("Error", f"Failed to start download thread for {url_to_download}. Error: {e}", dialog_type="error")
+        # Reset state if thread failed to launch
+        set_ui_state_downloading(False)
+        download_process_active = False
+        return False # Indicate failure
+
+# --- Start Download Thread (Handles URL or File Path) ---
 def start_download_thread(search_result_data=None):
-    """Validates inputs and starts the download process in a separate thread using the global Orpheus instance."""
+    """Validates inputs (URL or file path) and starts the download process(es). Queues downloads from files.""" # Modified docstring
     # Access global variables defined within the main process block
     global download_process_active, current_settings, orpheus_instance, url_entry, path_var_main, stop_event
+    global file_download_queue, current_batch_output_path # Access queue globals
 
     if orpheus_instance is None:
         show_centered_messagebox("Error", "Orpheus library not initialized. Cannot start download.", dialog_type="error")
@@ -1481,40 +1560,85 @@ def start_download_thread(search_result_data=None):
         if 'path_var_main' not in globals() or not path_var_main:
             print("Error: Path variable not available."); return
 
-        url = url_entry.get().strip()
-        if not url: show_centered_messagebox("Info", "Please enter a URL.", dialog_type="warning"); return
-        try: parsed_url = urlparse(url)
-        except Exception as parse_e: show_centered_messagebox("URL Error", f"Could not parse the entered URL: {parse_e}", dialog_type="error"); return
-        if not parsed_url.scheme in ['http', 'https'] or not parsed_url.netloc: show_centered_messagebox("Invalid URL", "Please enter a valid web URL starting with http(s)://", dialog_type="warning"); return
+        input_text = url_entry.get().strip()
+        if not input_text:
+             show_centered_messagebox("Info", "Please enter a URL or a file path.", dialog_type="warning"); return
 
         output_path = path_var_main.get().strip()
-        if not output_path: show_centered_messagebox("Info", "Please select a download path.", dialog_type="warning"); return
-        if download_process_active: show_centered_messagebox("Busy", "A download is already in progress!", dialog_type="warning"); return
+        if not output_path:
+            show_centered_messagebox("Info", "Please select a download path.", dialog_type="warning"); return
 
+        # --- Validate Output Path Once ---
+        output_path_final = ""
         try:
-            norm_path = os.path.normpath(output_path); output_path_final = os.path.join(norm_path, '') # Ensure trailing slash for consistency maybe? Orpheus handles it.
+            norm_path = os.path.normpath(output_path)
+            output_path_final = os.path.join(norm_path, '')
             if os.path.exists(norm_path):
-                if not os.path.isdir(norm_path): show_centered_messagebox("Error", f"Output path '{norm_path}' exists but is a file.", dialog_type="error"); return
-            else: os.makedirs(norm_path, exist_ok=True); print(f"Created output directory: {norm_path}")
-        except OSError as e: show_centered_messagebox("Error", f"Invalid or inaccessible output path: '{output_path}'.\nError: {e}", dialog_type="error"); return
-        except Exception as e: show_centered_messagebox("Error", f"An unexpected error occurred validating path '{output_path}'.\nError: {e}", dialog_type="error"); return
+                if not os.path.isdir(norm_path):
+                    show_centered_messagebox("Error", f"Output path '{norm_path}' exists but is a file.", dialog_type="error"); return
+            else:
+                os.makedirs(norm_path, exist_ok=True)
+                print(f"Created output directory: {norm_path}")
+        except OSError as e:
+            show_centered_messagebox("Error", f"Invalid or inaccessible output path: '{output_path}'.\nError: {e}", dialog_type="error"); return
+        except Exception as e:
+            show_centered_messagebox("Error", f"An unexpected error occurred validating path '{output_path}'.\nError: {e}", dialog_type="error"); return
+        # --- End Output Path Validation ---
 
-        set_ui_state_downloading(True)
-        stop_event.clear()
-        download_process_active = True
+        # --- Check if input is a file ---
+        if os.path.exists(input_text) and os.path.isfile(input_text):
+            print(f"Detected file input: {input_text}")
+            # Clear previous queue and store path for this batch
+            file_download_queue.clear()
+            current_batch_output_path = output_path_final
+            urls_in_file = []
+            try:
+                with open(input_text, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            urls_in_file.append(line)
+            except Exception as e:
+                show_centered_messagebox("File Error", f"Error reading file: {input_text}\n{e}", dialog_type="error")
+                current_batch_output_path = None # Reset path if file error
+                return
 
-        # Pass the *global* orpheus_instance
-        download_thread = threading.Thread(target=run_download_in_thread, args=(orpheus_instance, url, output_path_final, current_settings, search_result_data), daemon=True)
-        print("Starting download thread...")
-        download_thread.start()
-    except NameError as e:
-        print(f"Error starting download (widgets not ready?): {e}")
-        download_process_active = False # Reset flag if start fails
+            if not urls_in_file:
+                show_centered_messagebox("Info", f"File '{input_text}' is empty or contains no valid URLs.", dialog_type="warning")
+                current_batch_output_path = None # Reset path if file empty
+                return
+
+            # Populate the global queue
+            file_download_queue.extend(urls_in_file)
+            print(f"Added {len(file_download_queue)} URLs to the download queue.")
+
+            # Attempt to start the first download from the queue
+            if file_download_queue:
+                first_url = file_download_queue.pop(0) # Get and remove the first URL
+                print(f"Attempting to start first download from file queue: {first_url}")
+                # Call helper, pass None for search_result_data from file
+                _start_single_download(first_url, current_batch_output_path, None)
+            else:
+                 print("File queue was unexpectedly empty after population.")
+                 current_batch_output_path = None # Reset path
+
+        else:
+            # --- Input is treated as a single URL ---
+            # Clear queue and path if not processing a file batch
+            file_download_queue.clear()
+            current_batch_output_path = None
+            print(f"Treating input as single URL: {input_text}")
+            # Call helper, passing original search_result_data if it exists
+            _start_single_download(input_text, output_path_final, search_result_data)
+
     except Exception as e:
         print(f"Unexpected error in start_download_thread: {e}")
-        set_ui_state_downloading(False) # Try to reset UI
-        download_process_active = False # Reset flag
+        show_centered_messagebox("Error", f"An unexpected error occurred: {e}", dialog_type="error")
+        # Clear queue state in case of unexpected error
+        file_download_queue.clear()
+        current_batch_output_path = None
 
+# --- Stop Download ---
 def stop_download():
     # Access global variables defined within the main process block
     global stop_event, output_queue
@@ -2182,7 +2306,8 @@ if __name__ == "__main__":
                 "general": {
                     "output_path": os.path.join(_SCRIPT_DIR, "Downloads"),
                     "quality": "hifi",
-                    "search_limit": 20
+                    "search_limit": 20,
+                    "play_sound_on_finish": True # <<< Moved here
                 },
                 "artist_downloading": { "return_credited_albums": True, "separate_tracks_skip_downloaded": True },
                 "formatting": { "album_format": "{name}{explicit}", "playlist_format": "{name}{explicit}", "track_filename_format": "{track_number}. {name}", "single_full_path_format": "{name}", "enable_zfill": True, "force_album_format": False },
@@ -2191,7 +2316,18 @@ if __name__ == "__main__":
                 "lyrics": { "embed_lyrics": True, "embed_synced_lyrics": False, "save_synced_lyrics": True },
                 "covers": { "embed_cover": True, "main_compression": "high", "main_resolution": 1400, "save_external": False, "external_format": "png", "external_compression": "low", "external_resolution": 3000, "save_animated_cover": True },
                 "playlist": { "save_m3u": True, "paths_m3u": "absolute", "extended_m3u": True },
-                "advanced": { "advanced_login_system": False, "codec_conversions": { "alac": "flac", "wav": "flac" }, "conversion_flags": { "flac": { "compression_level": "5" } }, "conversion_keep_original": False, "cover_variance_threshold": 8, "debug_mode": False, "disable_subscription_checks": False, "enable_undesirable_conversions": False, "ignore_existing_files": False, "ignore_different_artists": True }
+                "advanced": {
+                    "advanced_login_system": False,
+                    "codec_conversions": { "alac": "flac", "wav": "flac" },
+                    "conversion_flags": { "flac": { "compression_level": "5" } },
+                    "conversion_keep_original": False,
+                    "cover_variance_threshold": 8,
+                    "debug_mode": False,
+                    "disable_subscription_checks": False,
+                    "enable_undesirable_conversions": False,
+                    "ignore_existing_files": False,
+                    "ignore_different_artists": True
+                }
             },
             "credentials": {
                 # <<< ADDED AppleMusic ENTRY >>>
@@ -2335,7 +2471,7 @@ if __name__ == "__main__":
         # URL Row
         url_frame = customtkinter.CTkFrame(download_tab, fg_color="transparent"); url_frame.grid(row=0, column=0, columnspan=4, sticky="ew", padx=10, pady=(15,5)); url_frame.grid_columnconfigure(1, weight=1)
         url_label = customtkinter.CTkLabel(url_frame, text="URL"); url_label.grid(row=0, column=0, sticky="w", padx=5)
-        url_entry = customtkinter.CTkEntry(url_frame, placeholder_text="Enter URL...", height=30, placeholder_text_color="#7F7F7F"); url_entry.grid(row=0, column=1, sticky="ew", padx=5)
+        url_entry = customtkinter.CTkEntry(url_frame, placeholder_text="Enter URL or text-file (urls.txt for example)...", height=30, placeholder_text_color="#7F7F7F"); url_entry.grid(row=0, column=1, sticky="ew", padx=5)
         url_entry.bind("<Return>", lambda event: start_download_thread()); url_entry.bind("<Button-3>", show_context_menu); url_entry.bind("<Button-2>", show_context_menu); url_entry.bind("<Control-Button-1>", show_context_menu)
         url_entry.bind("<FocusIn>", lambda e, w=url_entry: handle_focus_in(w))
         url_entry.bind("<FocusOut>", lambda e, w=url_entry: handle_focus_out(w))
