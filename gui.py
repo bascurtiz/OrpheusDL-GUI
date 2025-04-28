@@ -1066,6 +1066,12 @@ class QueueWriter(io.TextIOBase):
         # No, QueueWriter is instantiated with the queue, so it uses self.queue
         msg_strip = msg.lstrip()
 
+        # Filter out JioSaavn warning and error messages
+        if "[JioSaavn Warning] Accessing song data using the first key as fallback." in msg_strip:
+            return len(msg)
+        if "AttributeError: 'OrpheusOptions' object has no attribute 'global_settings'" in msg_strip:
+            return len(msg)
+
         is_fetching_line = False
         if msg_strip.startswith("Fetching "):
             parts = msg_strip.split(None, 1)
@@ -1174,12 +1180,14 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                 # Specific handling for jiosaavn.com/song/name/id URLs
                 media_type = DownloadTypeEnum.track
                 media_id = components[-1] # Assume ID is the last part
-                print(f"[URL Parse - JioSaavn Specific] Detected Type: {media_type}, ID: {media_id}")
+                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                    print(f"[URL Parse - JioSaavn Specific] Detected Type: {media_type}, ID: {media_id}")
             # <<< END JioSaavn Specific Check >>>
 
             # <<< General Parsing Logic (only if JioSaavn check didn't set ID/Type) >>>
             if media_id is None or media_type is None:
-                print("[URL Parse] Using general parsing logic...") # Optional debug
+                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                    print("[URL Parse] Using general parsing logic...") # Optional debug
                 if not components or len(components) <= 2:
                      if len(components) == 2 and components[1]: raise ValueError(f"Could not determine media type from short URL path: {parsed_url.path}")
                      else: raise ValueError(f"Invalid URL path structure: {parsed_url.path}")
@@ -1201,7 +1209,8 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                     if len(components) > 1: parsed_media_id = components[-1]
                     else: raise ValueError(f"Could not determine media ID from URL path: {parsed_url.path}")
                 media_id = parsed_media_id # Assign to the main variable
-                print(f"[URL Parse - General] Detected Type: {media_type}, ID: {media_id}")
+                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                    print(f"[URL Parse - General] Detected Type: {media_type}, ID: {media_id}")
 
         downloader.service = orpheus.load_module(module_name)
         downloader.service_name = module_name
@@ -1504,7 +1513,7 @@ def _start_single_download(url_to_download, output_path_final, search_result_dat
         print(f"Skipping start for {url_to_download}: A download is currently active.")
         # Re-queue if this was from the file queue?
         # For now, let's just skip. The queue logic in final_ui_update should prevent overlap.
-        return False # Indicate failure to start now
+        return False # Indicate failure
 
     # Basic URL validation
     try:
@@ -2153,7 +2162,7 @@ def _create_credential_tab_content(platform_name, tab_frame):
 
             # Create label
             current_pady = (13 if row == 0 else 2, 2)
-            customtkinter.CTkLabel(tab_frame, text=f"{field_key.replace('_', ' ').title()}:").grid(row=row, column=0, sticky="w", padx=10, pady=current_pady)
+            customtkinter.CTkLabel(tab_frame, text=f"{field_key.replace('_', ' ').title()}:").grid(row=row, column=0, sticky="w", padx=(2, 10), pady=current_pady)
 
             # Create entry
             entry = customtkinter.CTkEntry(tab_frame, textvariable=var)
@@ -2470,8 +2479,8 @@ if __name__ == "__main__":
         download_tab = tabview.add("Download"); download_tab.grid_columnconfigure(1, weight=1); download_tab.grid_rowconfigure(2, weight=1)
         # URL Row
         url_frame = customtkinter.CTkFrame(download_tab, fg_color="transparent"); url_frame.grid(row=0, column=0, columnspan=4, sticky="ew", padx=10, pady=(15,5)); url_frame.grid_columnconfigure(1, weight=1)
-        url_label = customtkinter.CTkLabel(url_frame, text="URL"); url_label.grid(row=0, column=0, sticky="w", padx=5)
-        url_entry = customtkinter.CTkEntry(url_frame, placeholder_text="Enter URL or text-file (urls.txt for example)...", height=30, placeholder_text_color="#7F7F7F"); url_entry.grid(row=0, column=1, sticky="ew", padx=5)
+        url_label = customtkinter.CTkLabel(url_frame, text="Input"); url_label.grid(row=0, column=0, sticky="w", padx=5)
+        url_entry = customtkinter.CTkEntry(url_frame, placeholder_text="Enter URL or text-file (e.g. urls.txt)...", height=30, placeholder_text_color="#7F7F7F"); url_entry.grid(row=0, column=1, sticky="ew", padx=5)
         url_entry.bind("<Return>", lambda event: start_download_thread()); url_entry.bind("<Button-3>", show_context_menu); url_entry.bind("<Button-2>", show_context_menu); url_entry.bind("<Control-Button-1>", show_context_menu)
         url_entry.bind("<FocusIn>", lambda e, w=url_entry: handle_focus_in(w))
         url_entry.bind("<FocusOut>", lambda e, w=url_entry: handle_focus_out(w))
@@ -2504,11 +2513,11 @@ if __name__ == "__main__":
         search_tab = tabview.add("Search"); search_main_frame = customtkinter.CTkFrame(search_tab, fg_color="transparent"); search_main_frame.pack(fill="both", expand=True, padx=9, pady=(10,0))
         # Controls Frame
         controls_frame = customtkinter.CTkFrame(search_main_frame, fg_color="transparent"); controls_frame.pack(fill="x", pady=(5, 10)); controls_frame.grid_columnconfigure(4, weight=1)
-        customtkinter.CTkLabel(controls_frame, text="Platform").grid(row=0, column=0, padx=(5,5), sticky="w")
+        customtkinter.CTkLabel(controls_frame, text="Platform").grid(row=0, column=0, padx=(5,1), sticky="w")
         # Use current_settings which was loaded within this block
         all_module_keys = current_settings.get("credentials", {}).keys(); platforms = sorted([name for name in all_module_keys if name != "Musixmatch"])
-        platform_var = tkinter.StringVar(value=platforms[0] if platforms else ""); platform_combo = customtkinter.CTkComboBox(controls_frame, values=platforms, variable=platform_var, width=140, state="readonly", height=30, dropdown_fg_color="#2B2B2B"); platform_combo.grid(row=0, column=1, padx=5); platform_var.trace_add("write", on_platform_change)
-        customtkinter.CTkLabel(controls_frame, text="Type").grid(row=0, column=2, padx=(5,5), sticky="w"); type_var = tkinter.StringVar(); type_combo = customtkinter.CTkComboBox(controls_frame, values=[], variable=type_var, width=100, state="readonly", height=30, dropdown_fg_color="#2B2B2B"); type_combo.grid(row=0, column=3, padx=5, sticky="w")
+        platform_var = tkinter.StringVar(value=platforms[0] if platforms else ""); platform_combo = customtkinter.CTkComboBox(controls_frame, values=platforms, variable=platform_var, width=140, state="readonly", height=30, dropdown_fg_color="#2B2B2B"); platform_combo.grid(row=0, column=1, padx=(5, 6)); platform_var.trace_add("write", on_platform_change)
+        customtkinter.CTkLabel(controls_frame, text="Type").grid(row=0, column=2, padx=(5,5), sticky="w"); type_var = tkinter.StringVar(); type_combo = customtkinter.CTkComboBox(controls_frame, values=[], variable=type_var, width=100, state="readonly", height=30, dropdown_fg_color="#2B2B2B"); type_combo.grid(row=0, column=3, padx=(2, 1), sticky="w")
         search_input_frame = customtkinter.CTkFrame(controls_frame, fg_color="transparent"); search_input_frame.grid(row=0, column=4, sticky="ew", padx=(10, 5))
         search_entry = customtkinter.CTkEntry(search_input_frame, placeholder_text="Enter search query...", height=30, placeholder_text_color="#7F7F7F"); search_entry.pack(side="left", fill="x", expand=True, padx=(0, 0))
         search_entry.bind("<Return>", lambda e: start_search()); search_entry.bind("<Button-3>", show_context_menu); search_entry.bind("<Button-2>", show_context_menu); search_entry.bind("<Control-Button-1>", show_context_menu)
@@ -2626,7 +2635,8 @@ if __name__ == "__main__":
         global_settings_tab = settings_tabview.add("Global")
         global_settings_frame = customtkinter.CTkScrollableFrame(global_settings_tab)
         # <<< ADDED BACK pack() and grid_columnconfigure() >>>
-        global_settings_frame.pack(expand=True, fill="both", padx=5, pady=(0, 5))
+        # Reduce horizontal padding for the entire frame
+        global_settings_frame.pack(expand=True, fill="both", padx=0, pady=(0, 5))
         global_settings_frame.grid_columnconfigure(1, weight=1)
         row = 0
 
@@ -2680,7 +2690,7 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
         for section_key, section_value in DEFAULT_SETTINGS["globals"].items():
             if isinstance(section_value, dict):
                 # Remove explicit font from label
-                customtkinter.CTkLabel(global_settings_frame, text=section_key.replace("_", " ").upper(), text_color="#898c8d", font=("Segoe UI", 11)).grid(row=row, column=0, columnspan=3, sticky="w", padx=10, pady=(10, 5)); row += 1
+                customtkinter.CTkLabel(global_settings_frame, text=section_key.replace("_", " ").upper(), text_color="#898c8d", font=("Segoe UI", 11)).grid(row=row, column=0, columnspan=3, sticky="w", padx=(0, 10), pady=(10, 5)); row += 1
                 for field, default_value in section_value.items():
                     # Use current_settings which was loaded within this block
                     current_value = current_settings["globals"].get(section_key, {}).get(field, default_value); full_key = f"{section_key}.{field}"
@@ -2690,8 +2700,8 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
                         continue
 
                     label_widget = customtkinter.CTkLabel(global_settings_frame, text=field.replace("_", " ").title())
-                    label_widget = customtkinter.CTkLabel(global_settings_frame, text=field.replace("_", " ").title())
-                    label_widget.grid(row=row, column=0, sticky="w", padx=10, pady=2)
+                    # Increase left padding to create an indent
+                    label_widget.grid(row=row, column=0, sticky="w", padx=(10, 10), pady=2)
 
                     widget = None; browse_btn = None
 
