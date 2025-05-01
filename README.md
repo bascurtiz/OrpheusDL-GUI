@@ -44,6 +44,7 @@ When adding external OrpheusDL modules (like Beatsource, etc.) by cloning them i
 |--------------|--------|
 | Apple Music  | \*     |
 | Beatport     | ✅     |
+| Beatsource   | ✅     |
 | Bugs         | \*     |
 | Deezer       | ✅     |
 | Genius       | \*     |
