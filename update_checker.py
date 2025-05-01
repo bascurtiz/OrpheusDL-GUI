@@ -162,7 +162,7 @@ def run_check_in_thread(current_version, root_window):
     Schedules the dialog display using root_window.after if an update is found.
     """
     def threaded_task():
-        print("[Update Check] Starting update check thread...")
+        # print("[Update Check] Starting update check thread...") # <<< Commented out
         release_info = get_latest_release_info()
 
         if not release_info or 'tag_name' not in release_info:

@@ -40,16 +40,17 @@ from tkinter import ttk
 from tqdm import tqdm
 from urllib.parse import urlparse
 import traceback # Add near other imports if not present
+import logging
 
 # --- Global Download Queue ---
 file_download_queue = []
 current_batch_output_path = None
 
 # Application Version
-__version__ = "1.0.2" # <<< Add version here
+__version__ = "1.0.3" # <<< Add version here
 
 # --- Import Update Checker ---
-from update_checker import run_check_in_thread # <<< Import the checker function
+from update_checker import run_check_in_thread
 
 # --- Platform-specific imports ---
 if platform.system() == "Windows":
@@ -113,23 +114,23 @@ def resource_path(relative_path):
     try:
         # PyInstaller creates a temp folder and stores path in _MEIPASS
         base_path = sys._MEIPASS
-        # print(f"[Resource Path] Running bundled, _MEIPASS: {base_path}") # Optional debug
+        # print(f"[Resource Path] Running bundled, _MEIPASS: {base_path}")
     except Exception:
         # _MEIPASS not found, running in normal Python environment
         try:
              # Use the directory of the script file
              base_path = os.path.dirname(os.path.abspath(__file__))
-             # print(f"[Resource Path] Running as script, using __file__: {base_path}") # Optional debug
+             # print(f"[Resource Path] Running as script, using __file__: {base_path}")
         except NameError:
              # Fallback if __file__ is not defined (e.g., interactive, frozen but no _MEIPASS?)
              base_path = os.path.abspath(".")
-             # print(f"[Resource Path] Running fallback, using cwd: {base_path}") # Optional debug
+             # print(f"[Resource Path] Running fallback, using cwd: {base_path}")
         # Ensure the fallback path exists, otherwise use script directory as last resort
         if not os.path.isdir(base_path):
              base_path = get_script_directory() # Fallback to original method if others fail
 
     final_path = os.path.join(base_path, relative_path)
-    # print(f"[Resource Path] Resolved '{relative_path}' to '{final_path}'") # Optional debug
+    # print(f"[Resource Path] Resolved '{relative_path}' to '{final_path}'")
     return final_path
 
 # --- Ensure the script's directory is in sys.path for bundled apps ---
@@ -186,7 +187,7 @@ if _orpheus_core_available:
         class ImageFileTypeEnum(enum.Enum): pass
         class CoverCompressionEnum(enum.Enum): pass
         class Oprinter: pass
-        class DownloadTypeEnum(enum.Enum): track="track"; artist="artist"; playlist="playlist"; album="album" # Basic definition
+        class DownloadTypeEnum(enum.Enum): track="track"; artist="artist"; playlist="playlist"; album="album"
         ORPHEUS_AVAILABLE = False
 else:
     # Define dummy classes/functions if core wasn't even available
@@ -201,7 +202,7 @@ else:
     class ImageFileTypeEnum(enum.Enum): pass
     class CoverCompressionEnum(enum.Enum): pass
     class Oprinter: pass
-    class DownloadTypeEnum(enum.Enum): track="track"; artist="artist"; playlist="playlist"; album="album" # Basic definition
+    class DownloadTypeEnum(enum.Enum): track="track"; artist="artist"; playlist="playlist"; album="album"
     ORPHEUS_AVAILABLE = False
 
 # --- Monkey-patch os.get_terminal_size for pythonw.exe ---
@@ -232,11 +233,10 @@ except Exception: pass
 
 # --- Monkey-patch CustomTkinter Drawing Errors ---
 try:
-    from customtkinter.windows.widgets import CTkEntry, CTkCheckBox, CTkComboBox # <<< Import CTkComboBox
-    # tkinter is likely already imported, but ensure it is for the exception type
+    from customtkinter.windows.widgets import CTkEntry, CTkCheckBox, CTkComboBox
     import tkinter
 
-    print("[Patch] Attempting to patch CTkEntry, CTkCheckBox, and CTkComboBox _draw methods...") # <<< Updated print
+    print("[Patch] Attempting to patch CTkEntry, CTkCheckBox, and CTkComboBox _draw methods...")
 
     # --- CTkEntry Patch ---
     _original_ctkentry_draw = CTkEntry._draw
@@ -248,7 +248,7 @@ try:
         except tkinter.TclError as e:
             if "invalid command name" in str(e):
                 # Suppress the specific TclError related to drawing on potentially destroyed canvas
-                pass # print(f"[Patch Suppressed] TclError in CTkEntry._draw for {self}: {e}") # Optional debug
+                pass # print(f"[Patch Suppressed] TclError in CTkEntry._draw for {self}: {e}")
             else:
                 # Re-raise other TclErrors
                 raise e
@@ -270,7 +270,7 @@ try:
         except tkinter.TclError as e:
             if "invalid command name" in str(e):
                 # Suppress the specific TclError related to drawing on potentially destroyed canvas
-                pass # print(f"[Patch Suppressed] TclError in CTkCheckBox._draw for {self}: {e}") # Optional debug
+                pass # print(f"[Patch Suppressed] TclError in CTkCheckBox._draw for {self}: {e}")
             else:
                 # Re-raise other TclErrors
                 raise e
@@ -292,7 +292,7 @@ try:
         except tkinter.TclError as e:
             if "invalid command name" in str(e):
                 # Suppress the specific TclError
-                pass # print(f"[Patch Suppressed] TclError in CTkComboBox._draw for {self}: {e}") # Optional debug
+                pass # print(f"[Patch Suppressed] TclError in CTkComboBox._draw for {self}: {e}")
             else:
                 # Re-raise other TclErrors
                 raise e
@@ -360,10 +360,14 @@ def load_settings():
         raise FileNotFoundError(error_message)
 
     try:
-        print(f"Directly reading settings from {CONFIG_FILE_PATH}...")
+        # <<< Wrap print in condition >>>
+        if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+            print(f"Directly reading settings from {CONFIG_FILE_PATH}...")
         with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as f:
             file_settings = json.load(f)
-        print("File read successfully.")
+        # <<< Wrap print in condition >>>
+        if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+            print("File read successfully.")
 
         # Merge Globals
         if "global" in file_settings:
@@ -381,7 +385,7 @@ def load_settings():
 
         # Merge Credentials
         if "modules" in file_settings:
-            platform_map_from_orpheus = { "bugs": "BugsMusic", "nugs": "Nugs", "soundcloud": "SoundCloud", "tidal": "Tidal", "qobuz": "Qobuz", "deezer": "Deezer", "idagio": "Idagio", "kkbox": "KKBOX", "napster": "Napster", "beatport": "Beatport", "musixmatch": "Musixmatch" }
+            platform_map_from_orpheus = { "bugs": "BugsMusic", "nugs": "Nugs", "soundcloud": "SoundCloud", "tidal": "Tidal", "qobuz": "Qobuz", "deezer": "Deezer", "idagio": "Idagio", "kkbox": "KKBOX", "napster": "Napster", "beatport": "Beatport", "beatsource": "Beatsource", "musixmatch": "Musixmatch" } # <<< Added beatsource mapping
             for orpheus_platform, creds_from_file in file_settings["modules"].items():
                 gui_platform = platform_map_from_orpheus.get(orpheus_platform)
                 if gui_platform and gui_platform in DEFAULT_SETTINGS["credentials"]:
@@ -389,7 +393,9 @@ def load_settings():
                     deep_merge(platform_defaults, creds_from_file)
                     settings["credentials"][gui_platform] = platform_defaults
 
-        print(f"Settings loaded and mapped from {CONFIG_FILE_PATH}")
+        # <<< Wrap print in condition >>>
+        if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+            print(f"Settings loaded and mapped from {CONFIG_FILE_PATH}")
 
     except (json.JSONDecodeError, IOError, TypeError, KeyError) as e:
         print(f"Error loading/mapping '{CONFIG_FILE_NAME}': {e}")
@@ -413,9 +419,13 @@ def initialize_orpheus():
     if orpheus_instance is None:
         try:
             # Directly initialize Orpheus without data_path
-            print("Initializing global Orpheus instance...")
+            # <<< Wrap print in condition >>>
+            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                print("Initializing global Orpheus instance...")
             orpheus_instance = Orpheus()
-            print("Global Orpheus instance initialized successfully.")
+            # <<< Wrap print in condition >>>
+            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                print("Global Orpheus instance initialized successfully.")
             # Optional: Keep the warning if extensions might still be relevant?
             # print("[Warning] Orpheus initialized without explicit data_path. 'extensions' folder might still cause issues.")
             return True
@@ -1187,7 +1197,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             # <<< General Parsing Logic (only if JioSaavn check didn't set ID/Type) >>>
             if media_id is None or media_type is None:
                 if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-                    print("[URL Parse] Using general parsing logic...") # Optional debug
+                    print("[URL Parse] Using general parsing logic...")
                 if not components or len(components) <= 2:
                      if len(components) == 2 and components[1]: raise ValueError(f"Could not determine media type from short URL path: {parsed_url.path}")
                      else: raise ValueError(f"Invalid URL path structure: {parsed_url.path}")
@@ -1200,17 +1210,61 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                         for url_keyword, type_enum in url_constants.items():
                             if component == url_keyword:
                                 type_matches.append(type_enum)
-                                if i + 1 < len(components): parsed_media_id = components[i+1]
+                                # <<< REMOVED: Don't assume the next component is the ID >>>
+                                # if i + 1 < len(components): parsed_media_id = components[i+1]
                                 break
-                        if type_matches and parsed_media_id is not None: break
+                        # <<< MODIFIED: Break after finding the FIRST type keyword >>>
+                        if type_matches: break
+                if not type_matches: raise ValueError(f"Could not determine media type from URL path components: {components}")
+                media_type = type_matches[-1] # Use the last found type if multiple match (shouldn't happen often)
+                # <<< Force media_id to be the LAST component >>>
+                if len(components) > 1:
+                    media_id = components[-1]
+                    # <<< NEW IMMEDIATE DEBUG PRINT >>>
+                    print(f"[URL Parse - Immediate Check] media_id assigned as: '{media_id}' from components: {components}")
+                    # <<< END NEW IMMEDIATE DEBUG PRINT >>>
+                else:
+                    raise ValueError(f"Could not determine media ID from URL path: {parsed_url.path}")
+                # <<< END Force ID >>>
+                # Removed assignment from parsed_media_id
+                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                    print(f"[URL Parse - General Force Last] Detected Type: {media_type}, ID: {media_id}")
+
+            # <<< START Direct Beatsource Playlist Check >>>
+            if module_name == 'beatsource' and 'playlist' in components and len(components) > 2:
+                print("[URL Parse] Applying specific Beatsource playlist logic...")
+                media_type = DownloadTypeEnum.playlist
+                media_id = components[-1] # Directly grab last component
+                print(f"[URL Parse - Beatsource Specific] Detected Type: {media_type}, ID: {media_id}")
+            # <<< END Direct Beatsource Playlist Check >>>
+            else:
+                # <<< Fallback to General Logic >>>
+                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                    print("[URL Parse] Applying general parsing logic (fallback)...")
+                # ... (Keep the previous general logic here as a fallback)
+                if not components or len(components) <= 2:
+                     if len(components) == 2 and components[1]: raise ValueError(f"Could not determine media type from short URL path: {parsed_url.path}")
+                     else: raise ValueError(f"Invalid URL path structure: {parsed_url.path}")
+                url_constants = orpheus.module_settings[module_name].url_constants
+                if not url_constants: url_constants = {'track': DownloadTypeEnum.track, 'album': DownloadTypeEnum.album, 'release': DownloadTypeEnum.album, 'playlist': DownloadTypeEnum.playlist, 'artist': DownloadTypeEnum.artist}
+                type_matches = []; parsed_media_id = None # Reset temporary variable
+                for i, component in enumerate(components):
+                    if isinstance(component, str):
+                        for url_keyword, type_enum in url_constants.items():
+                            if component == url_keyword:
+                                type_matches.append(type_enum)
+                                break # Inner loop
+                        if type_matches: break # Outer loop
                 if not type_matches: raise ValueError(f"Could not determine media type from URL path components: {components}")
                 media_type = type_matches[-1]
-                if parsed_media_id is None:
-                    if len(components) > 1: parsed_media_id = components[-1]
-                    else: raise ValueError(f"Could not determine media ID from URL path: {parsed_url.path}")
-                media_id = parsed_media_id # Assign to the main variable
+                if len(components) > 1:
+                    media_id = components[-1]
+                    print(f"[URL Parse - General Fallback Check] media_id assigned as: '{media_id}' from components: {components}")
+                else:
+                    raise ValueError(f"Could not determine media ID from URL path: {parsed_url.path}")
                 if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-                    print(f"[URL Parse - General] Detected Type: {media_type}, ID: {media_id}")
+                     print(f"[URL Parse - General Fallback] Detected Type: {media_type}, ID: {media_id}")
+                # <<< End Fallback General Logic >>>
 
         downloader.service = orpheus.load_module(module_name)
         downloader.service_name = module_name
@@ -1235,6 +1289,11 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                 except Exception as e: oprinter.oprint(f"[Error] Resolving SoundCloud URL failed: {e}"); data_dict = {}
             # Call get_playlist_info with appropriate parameters based on service
             playlist_info = None # Initialize
+            # <<< ADDED DEBUG PRINT >>>
+            # Wrap the print statement in a condition checking the debug_mode setting
+            if gui_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                print(f"[GUI DEBUG] Calling get_playlist_info with playlist_id = '{media_id}'")
+            # <<< END DEBUG PRINT >>>
             try:
                 if downloader.service_name == 'soundcloud':
                     playlist_info = downloader.service.get_playlist_info(playlist_id=media_id, data=data_dict)
@@ -1859,7 +1918,38 @@ def run_search_thread_target(orpheus, platform_name, search_type_str, query, gui
             formatted_result = { 'id': str(getattr(result, 'result_id', '')), 'title': str(getattr(result, 'name', 'N/A')), 'artist': ', '.join([str(a) for a in getattr(result, 'artists', [])]) if getattr(result, 'artists', []) else '-', 'duration': beauty_format_seconds(getattr(result, 'duration', None)) if getattr(result, 'duration', None) else '-', 'year': str(getattr(result, 'year', '-')), 'quality': ', '.join([str(q) for q in getattr(result, 'additional', [])]) if getattr(result, 'additional', []) else 'N/A', 'explicit': 'Y' if getattr(result, 'explicit', False) else '', 'raw_result': result }
             formatted_results.append(formatted_result)
         results = formatted_results
-    except Exception as e: error_message = f"Error during search: {str(e)}"; print(error_message)
+    except TypeError as e:
+        # Handle the specific case where the module returns None instead of an iterable
+        if "'NoneType' object is not iterable" in str(e):
+            error_message = f"Search Error ({platform_name}): Module returned no iterable results. API issue or module bug?"
+            print(f"[Search Error] Caught NoneType iterable error for {platform_name}. Module likely returned None.")
+            # Don't show a popup for this specific error, just log it
+            if 'output_queue' in globals() and output_queue:
+                output_queue.put(f"INFO: {error_message}\n")
+            # Set results to empty list so the UI shows "No results"
+            results = []
+            error_message = None # Prevent the generic error popup
+        else:
+            # Handle other TypeErrors normally
+            error_message = f"Type Error during search: {str(e)}"
+            print(f"[Search Error] {error_message}")
+            # Log the full traceback for unexpected TypeErrors
+            import traceback
+            tb_str = traceback.format_exc()
+            print(tb_str)
+            if 'output_queue' in globals() and output_queue:
+                 output_queue.put(f"ERROR: {error_message}\n{tb_str}\n")
+            results = [] # Ensure results is empty on error
+    except Exception as e:
+         error_message = f"Error during search: {str(e)}"
+         print(f"[Search Error] {error_message}")
+         # Log the full traceback for other exceptions
+         import traceback
+         tb_str = traceback.format_exc()
+         print(tb_str)
+         if 'output_queue' in globals() and output_queue:
+              output_queue.put(f"ERROR: {error_message}\n{tb_str}\n")
+         results = [] # Ensure results is empty on error
     finally:
         def _update_ui():
             # Access global 'search_process_active' defined in main process block
@@ -2006,8 +2096,8 @@ def build_url_from_result(result_data):
         except json.JSONDecodeError as e: print(f"[SC URL] API JSON Error: {e}"); return None
         except Exception as e: print(f"[SC URL] API Unexpected Error: {e}"); return None
     else:
-        base_urls = { "qobuz": "https://open.qobuz.com", "tidal": "https://listen.tidal.com", "deezer": "https://www.deezer.com", "beatport": "https://www.beatport.com", "napster": "https://web.napster.com", "idagio": "https://app.idagio.com" }
-        type_paths = { "qobuz": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "tidal": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "deezer": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "beatport": {"track": "track", "album": "release", "artist": "artist"}, "napster": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "idagio": {"track": "recording", "album": "album", "artist": "artist"} }
+        base_urls = { "qobuz": "https://open.qobuz.com", "tidal": "https://listen.tidal.com", "deezer": "https://www.deezer.com", "beatport": "https://www.beatport.com", "beatsource": "https://www.beatsource.com", "napster": "https://web.napster.com", "idagio": "https://app.idagio.com" } # <<< Added beatsource base url
+        type_paths = { "qobuz": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "tidal": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "deezer": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "beatport": {"track": "track", "album": "release", "artist": "artist"}, "beatsource": {"track": "track", "album": "release", "artist": "artist", "playlist": "playlist"}, "napster": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "idagio": {"track": "recording", "album": "album", "artist": "artist"} } # <<< Added beatsource type paths
         if p_lower in base_urls and p_lower in type_paths and t_lower in type_paths[p_lower]:
             url_path_segment = type_paths[p_lower][t_lower]; url = f"{base_urls[p_lower]}/{url_path_segment}/{item_id}"
             print(f"[URL Build - {platform}] Constructed: {url}"); return url
@@ -2083,7 +2173,9 @@ def _update_settings_tab_widgets():
     """Refreshes ONLY the Global settings tab widgets from current_settings."""
     # Access global variables defined within the main process block
     global current_settings, settings_vars, path_var_main, DEFAULT_SETTINGS
-    print("Refreshing Global Settings tab UI from current_settings...")
+    # <<< Wrap print in condition >>>
+    if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+        print("Refreshing Global Settings tab UI from current_settings...")
     try:
         # Globals ONLY
         for key, var in settings_vars.get("globals", {}).items():
@@ -2126,7 +2218,9 @@ def _update_settings_tab_widgets():
                   except Exception as e_set_main_other:
                       print(f"Error setting main path variable: {e_set_main_other}")
 
-        print("Global Settings tab UI refresh finished.")
+        # <<< Wrap print in condition >>>
+        if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+            print("Global Settings tab UI refresh finished.")
     except Exception as e: print(f"Error during Global settings UI refresh: {e}"); import traceback; traceback.print_exc()
 
 # <<< NEW FUNCTION: Create content for a specific credential tab >>>
@@ -2363,6 +2457,8 @@ if __name__ == "__main__":
                     "username": "",
                     "password": ""
                 },
+                # <<< ADDED Beatsource ENTRY >>>
+                "Beatsource": { "username": "", "password": "" },
                 "Beatport": { "username": "", "password": "" },
                 "BugsMusic": {
                     "username": "",
@@ -2423,8 +2519,9 @@ if __name__ == "__main__":
         # =====================================================================
         try:
             load_settings()
-            # <<< Debug Print 1 >>>
-            print(f"[DEBUG] After load_settings: output_path = {current_settings.get('globals', {}).get('general', {}).get('output_path')}")
+            # <<< Debug Print 1 - Wrap in condition >>>
+            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                print(f"[DEBUG] After load_settings: output_path = {current_settings.get('globals', {}).get('general', {}).get('output_path')}")
             initialize_orpheus() # <<< Attempt to initialize the global instance
         except FileNotFoundError as e:
              print(f"Initialization failed: {e}")
@@ -2440,10 +2537,11 @@ if __name__ == "__main__":
         # =====================================================================
         # --- GUI SETUP (Main Process Only) ---
         # =====================================================================
-        # <<< Debug Print 2 >>>
-        print(f"[DEBUG] Before GUI setup: output_path = {current_settings.get('globals', {}).get('general', {}).get('output_path')}")
+        # <<< Debug Print 2 - Wrap in condition >>>
+        if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+            print(f"[DEBUG] Before GUI setup: output_path = {current_settings.get('globals', {}).get('general', {}).get('output_path')}")
         app = customtkinter.CTk()
-        app.title("OrpheusDL GUI")
+        app.title(f"OrpheusDL GUI {__version__}")
         app.geometry("940x600")
 
         # Icon - Updated to check OS and look in root folder
@@ -2451,17 +2549,27 @@ if __name__ == "__main__":
             icon_filename = "icon.icns" if platform.system() == "Darwin" else "icon.ico"
             # Use resource_path to find the icon, works for dev and bundle
             icon_path = resource_path(icon_filename)
-            print(f"Looking for main window icon at: {icon_path}")
+            # <<< Wrap print in condition >>>
+            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                print(f"Looking for main window icon at: {icon_path}")
             if os.path.exists(icon_path):
                 if platform.system() != "Darwin":
                     app.iconbitmap(icon_path)
-                    print(f"Set window icon from: {icon_path}")
+                    # <<< Wrap print in condition >>>
+                    if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                        print(f"Set window icon from: {icon_path}")
                 else:
-                    print("Skipping app.iconbitmap on macOS (use .icns for app bundle/dock).")
+                    # <<< Wrap print in condition >>>
+                    if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                        print("Skipping app.iconbitmap on macOS (use .icns for app bundle/dock).")
             else:
-                print(f"Window icon file not found: {icon_path}")
+                # <<< Wrap print in condition >>>
+                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                    print(f"Window icon file not found: {icon_path}")
         except Exception as e:
-            print(f"Error setting window icon: {e}")
+            # <<< Wrap print in condition >>>
+            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                print(f"Error setting window icon: {e}")
 
         # Center Window (Reverted to simple calculation)
         screen_width = app.winfo_screenwidth()
@@ -2544,7 +2652,9 @@ if __name__ == "__main__":
             try:
                 # Get scaling factor (relative to 72 DPI)
                 scaling_factor = app.tk.call('tk', 'scaling')
-                print(f"[Style] Detected scaling factor: {scaling_factor}")
+                # <<< Wrap print in condition >>>
+                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                    print(f"[Style] Detected scaling factor: {scaling_factor}")
             except Exception as e:
                 print(f"[Style] Error getting scaling factor: {e}. Defaulting to 1.0")
                 scaling_factor = 1.0
@@ -2565,7 +2675,9 @@ if __name__ == "__main__":
 
             scaled_row_height = max(20, round(scaled_font_size * row_height_multiplier)) # Calculate based on conditional multiplier
             tree_font_family = "Segoe UI" # Preferred Windows font
-            print(f"[Style Windows] Using font: {tree_font_family} {scaled_font_size}pt (Scaled from {base_font_size}pt), Row height: {scaled_row_height}px")
+            # <<< Wrap print in condition >>>
+            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                print(f"[Style Windows] Using font: {tree_font_family} {scaled_font_size}pt (Scaled from {base_font_size}pt), Row height: {scaled_row_height}px")
             # Define font config for Windows heading (family, size) - assumes default weight is normal
             heading_font_config = (tree_font_family, scaled_font_size)
 
@@ -2573,7 +2685,9 @@ if __name__ == "__main__":
             scaled_font_size = 13 # Default size mainly for row height calculation
             scaled_row_height = max(20, round(scaled_font_size * 2.2)) # Use a standard multiplier
             tree_font_family = None # Use system default font family for base Treeview
-            print(f"[Style Non-Windows] Using system default font, Row height: {scaled_row_height}px")
+            # <<< Wrap print in condition >>>
+            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                print(f"[Style Non-Windows] Using system default font, Row height: {scaled_row_height}px")
             # Define heading font config: Default family, explicit size 10, normal weight
             heading_font_config = (None, 10, 'normal')
 
@@ -2642,48 +2756,49 @@ if __name__ == "__main__":
 
         # --- Tooltip Texts ---
         tooltip_texts = {
-            "general.output_path": "Set the absolute or relative output path with / as the delimiter",
-            "general.quality": """\"hifi\": FLAC higher than 44.1/16 if available
-\"lossless\": FLAC with 44.1/16 if available
-\"high\": lossy codecs such as MP3, AAC, ... in a higher bitrate
-\"low\": lossy codecs such as MP3, AAC, ... in a lower bitrate
-NOTE: The download_quality really depends on the used modules, so check out the modules README.md""",
-            "general.search_limit": "How many search results are shown",
-            "formatting.track_filename_format": """How tracks are formatted in albums and playlists.
-track_filename_format variables are:
- {name}, {album}, {album_artist}, {album_id}, {track_number},
- {total_tracks}, {disc_number}, {total_discs}, {release_date}, {release_year}, {artist_id},
- {isrc}, {upc}, {explicit}, {copyright}, {codec}, {sample_rate}, {bit_depth}.""",
-            "formatting.album_format": """Base directories for their respective formats - tracks and cover art are stored here.
-May have slashes in it, for instance {artist}/{album}.
-album_format variables are:
- {name}, {id}, {artist}, {artist_id}, {release_year}, {upc}, {explicit}, {quality}, {artist_initials}.""",
-            "formatting.playlist_format": """Base directories for their respective formats - tracks and cover art are stored here.
-May have slashes in it, for instance {artist}/{album}.
-playlist_format variables are:
+            "general.output_path": "The main folder where all downloads will be saved.",
+            "general.quality": "Select the desired audio quality preference.",
+            "general.search_limit": "Maximum number of results to display in the Search tab.",
+            "general.play_sound_on_finish": "Play a notification sound when a download completes.",
+            "artist_downloading.return_credited_albums": "Include albums where the artist is credited but not the main artist.",
+            "artist_downloading.separate_tracks_skip_downloaded": "When downloading artists, skip tracks that are part of albums already downloaded.",
+            "formatting.album_format": """Folder structure for albums. Variables:
+ {name}, {id}, {artist}, {artist_id}, {release_year}, {upc}, {explicit}, {quality}, {artist_initials}""",
+            "formatting.playlist_format": """Folder structure for playlists. Variables:
  {name}, {creator}, {tracks}, {release_year}, {explicit}, {creator_id}""",
-            "formatting.single_full_path_format": """How singles are handled, which is separate to how the above work.
-Instead, this has both the folder's name and the track's name.""",
-            "formatting.enable_zfill": "Enables zero padding for track_number, total_tracks, disc_number, total_discs if the corresponding number has more than 2 digits",
-            "formatting.force_album_format": "Forces the album_format for tracks instead of the single_full_path_format and also uses album_format in the playlist_format folder",
-            "codecs.proprietary_codecs": """Enable it to allow MQA, E-AC-3 JOC or AC-4 IMS
-Note: spatial_codecs has priority over proprietary_codecs when deciding if a codec is enabled""",
-            "codecs.spatial_codecs": """Enable it to allow MPEG-H 3D, E-AC-3 JOC or AC-4 IMS
-Note: spatial_codecs has priority over proprietary_codecs when deciding if a codec is enabled""",
-            "module_defaults.lyrics": "Change default to the module name under /modules in order to retrieve lyrics from the selected module",
-            "module_defaults.covers": "Change default to the module name under /modules in order to retrieve covers from the selected module",
-            "module_defaults.credits": "Change default to the module name under /modules in order to retrieve credits from the selected module",
-            "lyrics.embed_lyrics": "Embeds the (unsynced) lyrics inside every track",
-            "lyrics.embed_synced_lyrics": "Embeds the synced lyrics inside every track (needs embed_lyrics to be enabled) (required for Roon)",
-            "lyrics.save_synced_lyrics": "Saves the synced lyrics inside a .lrc file in the same directory as the track with the same track_format variables",
-            "covers.embed_cover": "Enable it to embed the album cover inside every track",
-            "covers.main_compression": "Compression of the main cover",
-            "covers.main_resolution": "Resolution (in pixels) of the cover of the module used",
-            "covers.save_external": "Enable it to save the cover from a third party cover module",
-            "covers.external_format": "Format of the third party cover, supported values: jpg, png, webp",
-            "covers.external_compression": "Compression of the third party cover, supported values: low, high",
-            "covers.external_resolution": "Resolution (in pixels) of the third party cover",
-            "covers.save_animated_cover": "Enable saving the animated cover when supported from the module (often in MPEG-4 format)"
+            "formatting.track_filename_format": """Filename format for tracks. Variables:
+ {track_number}, {total_tracks}, {disc_number}, {total_discs}, {name}, {id}, {album},
+ {album_id}, {artist}, {artist_id}, {isrc}, {release_year}, {explicit}, {quality}, {artist_initials}""",
+            "formatting.single_full_path_format": """Full path format (folder + filename) for single tracks not part of an album download.\nUses same variables as Track Filename Format.""",
+            "formatting.enable_zfill": "Pads track/disc numbers with leading zeros (e.g., 01, 02).",
+            "formatting.force_album_format": "Use the album_format structure even for single track downloads.",
+            "codecs.proprietary_codecs": "Enable potentially proprietary codecs like MQA (if supported by module).",
+            "codecs.spatial_codecs": "Enable spatial audio codecs like Dolby Atmos (if supported by module).",
+            "module_defaults.lyrics": "Default module to use for fetching lyrics.",
+            "module_defaults.covers": "Default module to use for fetching cover art.",
+            "module_defaults.credits": "Default module to use for fetching track credits.",
+            "lyrics.embed_lyrics": "Embed standard (unsynced) lyrics into the audio file.",
+            "lyrics.embed_synced_lyrics": "Embed synced (LRC) lyrics into the audio file (requires embed_lyrics).",
+            "lyrics.save_synced_lyrics": "Save synced lyrics as a separate .lrc file alongside the track.",
+            "covers.embed_cover": "Embed the main cover art into the audio file.",
+            "covers.main_compression": "Compression level for embedded/saved main cover art.",
+            "covers.main_resolution": "Maximum resolution (pixels) for the main cover art.",
+            "covers.save_external": "Save cover art from a third-party module (if configured).",
+            "covers.external_format": "Format for the saved external cover art.",
+            "covers.external_compression": "Compression level for the saved external cover art.",
+            "covers.external_resolution": "Maximum resolution (pixels) for the saved external cover art.",
+            "covers.save_animated_cover": "Save animated cover art (GIF/MP4) if available.",
+            "playlist.save_m3u": "Create an M3U playlist file for playlist downloads.",
+            "playlist.paths_m3u": "Select 'relative' or 'absolute' paths in M3U file.",
+            "playlist.extended_m3u": "Include extended info like track length in M3U file.",
+            "advanced.advanced_login_system": "Enable advanced login system (Use only if instructed by module documentation).",
+            "advanced.conversion_keep_original": "Keep the original file after successful codec conversion.",
+            "advanced.cover_variance_threshold": "Tolerance for accepting covers with slightly different sizes (0-100).",
+            "advanced.debug_mode": "Allows various detailed informational and diagnostic messages to be printed to the console.\nIntended for troubleshooting issues only.",
+            "advanced.disable_subscription_checks": "Prevents from checking if subscription for music service you are trying to download from is active.",
+            "advanced.enable_undesirable_conversions": """Controls allowance to perform codec conversions that might result in quality loss or are not recommended.\nExamples:\nLossy-to-Lossy\nLossless-to-Lossy (if not preferred)\nUnnecessary Lossless-to-Lossless""",
+            "advanced.ignore_existing_files": "Skips downloading files, if a file with the target name already exists in the output directory.",
+            "advanced.ignore_different_artists": "When downloading albums, ignore tracks where the artist differs from the main album artist."
         }
 
         # Use DEFAULT_SETTINGS which was defined within this block
@@ -2776,7 +2891,7 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
             platform_tab_frame = settings_tabview.add(platform_key)
             # Store the frame using the key
             credential_tab_frames[platform_key] = platform_tab_frame
-            print(f"  -> Added placeholder tab: {platform_key}")
+            # print(f"  -> Added placeholder tab: {platform_key}") # <<< Commented out
 
         # Save Controls Frame (Remains the same)
         save_controls_frame = customtkinter.CTkFrame(settings_tab, fg_color="transparent"); save_controls_frame.pack(side="bottom", anchor="se", padx=10, pady=(0, 10))
@@ -2790,31 +2905,45 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
         icon_title_frame.pack(pady=(0, 5)) # Reduced bottom padding from 15 to 5
         try:
             current_platform = platform.system() # <-- Added
-            print(f"[DEBUG AboutIcon] Platform detected: {current_platform}") # <-- Added
+            # <<< Wrap debug print in condition >>>
+            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                print(f"[DEBUG AboutIcon] Platform detected: {current_platform}") # <-- Added
 
             # <<< Platform-specific icon filename and size for About tab >>>
             if current_platform == "Linux": # <-- Check against variable
                 icon_filename = "icon.png" # Use PNG on Linux
                 icon_display_size = (48, 48) # Default size
-                print(f"[DEBUG AboutIcon] Set Linux display size to {icon_display_size}")
+                # <<< Wrap debug print in condition >>>
+                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                    print(f"[DEBUG AboutIcon] Set Linux display size to {icon_display_size}")
             elif current_platform == "Darwin": # <-- Check against variable
                 icon_filename = "icon.icns"
                 icon_display_size = (72, 72) # 1.5x size for macOS
-                print(f"[DEBUG AboutIcon] Set macOS display size to {icon_display_size}")
+                # <<< Wrap debug print in condition >>>
+                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                    print(f"[DEBUG AboutIcon] Set macOS display size to {icon_display_size}")
             else: # Default to Windows/Other
                 icon_filename = "icon.ico" # Default to ICO for Windows/Other
                 icon_display_size = (48, 48) # Default size
-                print(f"[DEBUG AboutIcon] Set default display size to {icon_display_size}")
+                # <<< Wrap debug print in condition >>>
+                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                    print(f"[DEBUG AboutIcon] Set default display size to {icon_display_size}")
 
-            print(f"[DEBUG AboutIcon] Determined icon filename: {icon_filename}") # <-- Added
+            # <<< Wrap debug print in condition >>>
+            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                print(f"[DEBUG AboutIcon] Determined icon filename: {icon_filename}") # <-- Added
 
             # Use resource_path to find the icon, works for dev and bundle
             icon_path = resource_path(icon_filename)
-            print(f"[DEBUG AboutIcon] Generated icon path: {icon_path}") # <-- Added
-            print(f"[DEBUG AboutIcon] Looking for AboutTab icon at: {icon_path}")
+            # <<< Wrap debug print in condition >>>
+            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                print(f"[DEBUG AboutIcon] Generated icon path: {icon_path}") # <-- Added
+                print(f"[DEBUG AboutIcon] Looking for AboutTab icon at: {icon_path}")
 
             icon_exists = os.path.exists(icon_path) # <-- Added
-            print(f"[DEBUG AboutIcon] Does icon exist at path? {icon_exists}") # <-- Added
+            # <<< Wrap debug print in condition >>>
+            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                print(f"[DEBUG AboutIcon] Does icon exist at path? {icon_exists}") # <-- Added
 
             # <<< icon_display_size is now defined based on platform BEFORE usage >>>
 
@@ -2822,22 +2951,34 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
                 # ... (existing size calculation logic) ...
 
                 try:
-                    print("[DEBUG AboutIcon] Attempting to open image...") # <-- Added
+                    # <<< Wrap debug print in condition >>>
+                    if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                        print("[DEBUG AboutIcon] Attempting to open image...") # <-- Added
                     # Resize and create CTkImage using the determined size
                     img = Image.open(icon_path).resize(icon_display_size, Image.LANCZOS)
-                    print("[DEBUG AboutIcon] Image opened successfully.") # <-- Added
+                    # <<< Wrap debug print in condition >>>
+                    if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                        print("[DEBUG AboutIcon] Image opened successfully.") # <-- Added
                     icon_image = customtkinter.CTkImage(light_image=img, dark_image=img, size=icon_display_size)
-                    print("[DEBUG AboutIcon] CTkImage created successfully.") # <-- Added
+                    # <<< Wrap debug print in condition >>>
+                    if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                        print("[DEBUG AboutIcon] CTkImage created successfully.") # <-- Added
                     icon_label = customtkinter.CTkLabel(icon_title_frame, text="", image=icon_image)
                     # <<< Conditional padding for the icon label >>>
                     icon_pady = 0 if current_platform == "Darwin" else 5 # <-- Check against variable
                     icon_label.pack(pady=icon_pady)
                 except Exception as img_e:
-                    print(f"[DEBUG AboutIcon] Could not load/process icon image: {type(img_e).__name__}: {img_e}") # <-- Modified
+                    # <<< Wrap debug print in condition >>>
+                    if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                        print(f"[DEBUG AboutIcon] Could not load/process icon image: {type(img_e).__name__}: {img_e}") # <-- Modified
             else:
-                print(f"[DEBUG AboutIcon] Icon file not found or path invalid: {icon_path}") # <-- Modified
+                # <<< Wrap debug print in condition >>>
+                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                    print(f"[DEBUG AboutIcon] Icon file not found or path invalid: {icon_path}") # <-- Modified
         except Exception as path_e:
-            print(f"[DEBUG AboutIcon] Error during icon path processing/loading: {type(path_e).__name__}: {path_e}") # <-- Modified
+            # <<< Wrap debug print in condition >>>
+            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                print(f"[DEBUG AboutIcon] Error during icon path processing/loading: {type(path_e).__name__}: {path_e}") # <-- Modified
         # ... (rest of About tab) ...
 
         # Make title bold and remove bottom padding
@@ -2871,14 +3012,62 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
         modules_title = customtkinter.CTkLabel(about_frame, text="MODULES", font=section_header_font, text_color=section_header_color)
         modules_title.pack(pady=(20, 5))
         modules_frame = customtkinter.CTkFrame(about_frame, fg_color="transparent"); modules_frame.pack(fill="x", padx=20, pady=(0, 10))
-        module_buttons_data = [ ("Apple Music", "https://github.com/yarrm80s/orpheusdl-applemusic-basic"), ("Beatport", "https://github.com/Dniel97/orpheusdl-beatport"), ("Bugs", "https://github.com/Dniel97/orpheusdl-bugsmusic"), ("Deezer (acc)", "https://github.com/uhwot/orpheusdl-deezer"), ("Deezer (arl)", "https://github.com/thekvt/orpheusdl-deezer"), ("Genius", "https://github.com/Dniel97/orpheusdl-genius"), ("Idagio", "https://github.com/Dniel97/orpheusdl-idagio"), ("JioSaavn", "https://github.com/bunnykek/orpheusdl-jiosaavn"), ("KKBOX", "https://github.com/uhwot/orpheusdl-kkbox"), ("Musixmatch", "https://github.com/yarrm80s/orpheusdl-musixmatch"), ("Napster", "https://github.com/yarrm80s/orpheusdl-napster"), ("Nugs.net", "https://github.com/Dniel97/orpheusdl-nugs"), ("Qobuz (acc)", "https://github.com/yarrm80s/orpheusdl-qobuz"), ("Qobuz (id/tok)", "https://github.com/thekvt/orpheusdl-qobuz"), ("SoundCloud", "https://github.com/yarrm80s/orpheusdl-soundcloud"), ("Tidal", "https://github.com/Dniel97/orpheusdl-tidal") ]
+        # --- MODIFIED: Added Beatsource ---
+        module_buttons_data = [
+            ("Apple Music", "https://github.com/yarrm80s/orpheusdl-applemusic-basic"),
+            ("Beatport", "https://github.com/Dniel97/orpheusdl-beatport"),
+            ("Beatsource", "https://github.com/bascurtiz/orpheusdl-beatsource"), # <<< ADDED HERE
+            ("Bugs", "https://github.com/Dniel97/orpheusdl-bugsmusic"),
+            ("Deezer (acc)", "https://github.com/uhwot/orpheusdl-deezer"),
+            ("Deezer (arl)", "https://github.com/thekvt/orpheusdl-deezer"),
+            ("Genius", "https://github.com/Dniel97/orpheusdl-genius"),
+            ("Idagio", "https://github.com/Dniel97/orpheusdl-idagio"),
+            ("JioSaavn", "https://github.com/bunnykek/orpheusdl-jiosaavn"),
+            ("KKBOX", "https://github.com/uhwot/orpheusdl-kkbox"),
+            ("Musixmatch", "https://github.com/yarrm80s/orpheusdl-musixmatch"),
+            ("Napster", "https://github.com/yarrm80s/orpheusdl-napster"),
+            ("Nugs.net", "https://github.com/Dniel97/orpheusdl-nugs"),
+            ("Qobuz (acc)", "https://github.com/yarrm80s/orpheusdl-qobuz"),
+            ("Qobuz (id/tok)", "https://github.com/thekvt/orpheusdl-qobuz"),
+            ("SoundCloud", "https://github.com/yarrm80s/orpheusdl-soundcloud"),
+            ("Tidal", "https://github.com/Dniel97/orpheusdl-tidal")
+        ]
+        # Keep buttons sorted alphabetically by name
+        module_buttons_data.sort(key=lambda item: item[0])
+        # --- END MODIFICATION ---
         cols = 8
-        for i, (text, url) in enumerate(module_buttons_data):
-            row = i // cols; col = i % cols
-            command = lambda u=url: os.startfile(u) if platform.system() == "Windows" else subprocess.Popen(["open", u]) if platform.system() == "Darwin" else subprocess.Popen(["xdg-open", u])
-            btn = customtkinter.CTkButton(modules_frame, text=text, command=command, width=110, fg_color="#343638", hover_color="#1F6AA5")
-            btn.grid(row=row, column=col, padx=5, pady=5)
-        for c in range(cols): modules_frame.grid_columnconfigure(c, weight=1)
+        # --- MODIFIED: Adjusted logic to handle empty list gracefully ---
+        rows = (len(module_buttons_data) + cols - 1) // cols if module_buttons_data else 0
+        # --- END MODIFICATION ---
+        # Configure columns to have equal weight for centering
+        for i in range(cols):
+            modules_frame.grid_columnconfigure(i, weight=1)
+
+        # Button styling
+        button_width = 110
+        button_padx = 2
+        button_pady = 2
+
+        # Create buttons in a grid
+        for index, (name, url) in enumerate(module_buttons_data):
+            row = index // cols
+            col = index % cols
+            # Define the command to open the URL
+            command = lambda u=url: (subprocess.Popen(["open", u]) if platform.system() == "Darwin" else subprocess.Popen(["xdg-open", u]) if platform.system() == "Linux" else os.startfile(u))
+
+            # Create the button
+            button = customtkinter.CTkButton(
+                modules_frame,
+                text=name,
+                command=command,
+                width=button_width,
+                fg_color="#343638", # Consistent button color
+                hover_color="#1F6AA5" # Consistent hover color
+            )
+            button.grid(row=row, column=col, padx=button_padx, pady=button_pady, sticky="nsew")
+
+        # --- Update Status Bar ---
+        # ... existing code ...
 
         # --- Disable buttons if Orpheus failed to initialize ---
         # Check orpheus_instance which was initialized in this block
@@ -2904,12 +3093,18 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
         # --- Explicitly update UI vars after main loop starts ---
         # <<< Re-introduce _initial_ui_update definition >>>
         def _initial_ui_update():
-            print("[DEBUG] Running _initial_ui_update...")
+            # <<< Wrap debug print in condition >>>
+            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                print("[DEBUG] Running _initial_ui_update...")
             try:
                 # Refresh Global settings tab only
-                print("  -> Calling _update_settings_tab_widgets()")
+                # <<< Wrap print in condition >>>
+                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                    print("  -> Calling _update_settings_tab_widgets()") # Keep this print for now
                 _update_settings_tab_widgets()
-                print("[DEBUG] _initial_ui_update finished.")
+                # <<< Wrap debug print in condition >>>
+                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                    print("[DEBUG] _initial_ui_update finished.")
 
             except Exception as e_init_update:
                  print(f"[Error] in _initial_ui_update: {e_init_update}")
@@ -2921,7 +3116,7 @@ Note: spatial_codecs has priority over proprietary_codecs when deciding if a cod
     else:
         # --- Code running in a SPAWNED CHILD process ---
         # Exit immediately to prevent re-running GUI/initialization
-        print(f"[Child Process {os.getpid()}] Detected, exiting.") # Optional debug
+        print(f"[Child Process {os.getpid()}] Detected, exiting.")
         sys.exit() # Crucial step
 
 # --- End Of File ---
