@@ -24,6 +24,9 @@ https://youtu.be/AGsYTQuO7nk
 7. Install the required dependencies: `pip3 install -r requirements-gui.txt`
 8. Run the GUI: `python3 gui.py`
 
+**Important Note on Modules:**
+When adding external OrpheusDL modules (like Beatsource, etc.) by cloning them into the `modules` directory, ensure the destination directory name is **lowercase** (e.g., `modules/beatsource`, not `modules/Beatsource`). The module loading system expects lowercase directory names.
+
 ## Compatibility
 
 ### Operating Systems
