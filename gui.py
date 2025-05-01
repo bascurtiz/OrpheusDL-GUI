@@ -547,7 +547,7 @@ def save_settings(show_confirmation: bool = True):
              if isinstance(section_data, dict) and isinstance(mapped_orpheus_updates["global"].get(section_key), dict):
                   if section_key not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"][section_key] = {}
                   for item_key, item_value in section_data.items(): mapped_orpheus_updates["global"][section_key][item_key] = item_value
-    platform_map_to_orpheus = { "BugsMusic": "bugs", "Nugs": "nugs", "SoundCloud": "soundcloud", "Tidal": "tidal", "Qobuz": "qobuz", "Deezer": "deezer", "Idagio": "idagio", "KKBOX": "kkbox", "Napster": "napster", "Beatport": "beatport", "Musixmatch": "musixmatch" }
+    platform_map_to_orpheus = { "BugsMusic": "bugs", "Nugs": "nugs", "SoundCloud": "soundcloud", "Tidal": "tidal", "Qobuz": "qobuz", "Deezer": "deezer", "Idagio": "idagio", "KKBOX": "kkbox", "Napster": "napster", "Beatport": "beatport", "Beatsource": "beatsource", "Musixmatch": "musixmatch" }
     for gui_platform, creds in updated_gui_settings.get("credentials", {}).items():
         orpheus_platform = platform_map_to_orpheus.get(gui_platform)
         if orpheus_platform:
