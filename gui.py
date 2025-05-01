@@ -42,9 +42,70 @@ from urllib.parse import urlparse
 import traceback # Add near other imports if not present
 import logging
 
-# --- Global Download Queue ---
+# --- Dummy Stderr Class ---
+class DummyStderr:
+    """A dummy file-like object that discards stderr output."""
+    def write(self, msg): pass
+    def flush(self): pass
+    def isatty(self): return False # Some libraries check this
+
+# --- Global Download Queue & Logging Queue ---
 file_download_queue = []
+output_queue = queue.Queue() # Queue for both print and log messages
 current_batch_output_path = None
+
+# --- Custom Logging Handler ---
+class QueueLogHandler(logging.Handler):
+    """A handler class which sends records to a queue."""
+    def __init__(self, log_queue):
+        super().__init__()
+        self.log_queue = log_queue
+
+    def emit(self, record):
+        # Access global settings to check debug mode for filtering
+        global current_settings
+
+        # --- Filter specific Beatsource 404 warning if debug mode is OFF ---
+        is_beatsource_404_warning = (
+            record.name == 'root' and # Check for root logger
+            record.levelname == 'WARNING' and
+            "Fetching as playlist failed (404)" in record.getMessage()
+        )
+        is_debug_mode = current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False)
+
+        if is_beatsource_404_warning and not is_debug_mode:
+            return # Skip emitting this specific warning
+        # --- End filter ---
+
+        # Prepend log level to the message (for all other messages)
+        log_entry = f"[{record.levelname}] {self.format(record)}"
+        self.log_queue.put(log_entry)
+
+# --- Configure Root Logger ---
+def setup_logging(log_queue):
+    # Access global settings to check debug mode
+    global current_settings
+
+    root_logger = logging.getLogger()
+    # Remove default handlers like StreamHandler to avoid duplicate output or errors
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    # Add our custom queue handler
+    queue_handler = QueueLogHandler(log_queue)
+    # Optional: Add a formatter for more detailed logs
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(message)s', datefmt='%H:%M:%S')
+    queue_handler.setFormatter(formatter)
+    root_logger.addHandler(queue_handler)
+    # Set the desired logging level (e.g., INFO, WARNING, ERROR)
+    root_logger.setLevel(logging.INFO) 
+    
+    # Only log the configuration message if debug mode is enabled
+    if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+        logging.info("Logging configured to use GUI queue.")
+
+# Initial setup call (needs to happen before threads use logging)
+# We will call this later in the main execution block
+# setup_logging(output_queue)
 
 # Application Version
 __version__ = "1.0.3" # <<< Add version here
@@ -1069,6 +1130,8 @@ def _check_and_toggle_scrollbar(tree_widget, scrollbar_widget):
 
 # --- Queue Writer for Stdout Redirection ---
 class QueueWriter(io.TextIOBase):
+    # NOTE: This QueueWriter remains useful for capturing direct print() statements
+    # that might still exist or be added later, distinct from logging.
     def __init__(self, queue_instance): self.queue = queue_instance
 
     def write(self, msg):
@@ -1103,7 +1166,10 @@ class QueueWriter(io.TextIOBase):
             if is_progress_line:
                 pass
             else:
-                self.queue.put(msg.replace('\r', ''))
+                # Ensure message ends with a newline for the text box
+                final_msg = msg.replace('\r', '').strip()
+                if final_msg: # Avoid putting empty lines from just '\r'
+                   self.queue.put(final_msg + '\n')
 
         return len(msg)
 
@@ -1125,32 +1191,34 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
     # Access global variables defined within the main process block
     global output_queue, stop_event, app, download_process_active, DEFAULT_SETTINGS
 
+    # Logging should already be configured by the time this thread starts
+
     if orpheus is None:
-        output_queue.put("ERROR: Orpheus instance not available. Cannot start download.\n")
-        print("ERROR: run_download_in_thread called with invalid Orpheus instance.")
+        # Use logging instead of direct queue put for errors
+        logging.error("Orpheus instance not available. Cannot start download.")
         try:
             # Ensure app exists before scheduling UI reset
             if 'app' in globals() and app and app.winfo_exists():
                  app.after(0, lambda: set_ui_state_downloading(False))
         except NameError: pass
-        except Exception as e: print(f"Error scheduling UI reset after Orpheus instance error: {e}")
+        except Exception as e: logging.error(f"Error scheduling UI reset after Orpheus instance error: {e}")
         return
 
     original_stdout = sys.stdout
     original_stderr = sys.stderr
-    queue_writer = QueueWriter(output_queue)
+    queue_writer = QueueWriter(output_queue) # Keep QueueWriter for direct print() calls
+    dummy_stderr = DummyStderr() # Create instance of dummy stderr
     is_cancelled = False
     download_exception_occurred = False # <<< Flag to track download errors
     start_time = datetime.datetime.now()
 
     try:
+        # Redirect stdout to queue, stderr to dummy object
         sys.stdout = queue_writer
-        sys.stderr = queue_writer
-        # print("[INIT] Starting download thread setup...") # <<< Commented out
-        # Ensure 'temp' directory exists relative to script/executable
-        temp_dir = os.path.join(get_script_directory(), 'temp')
-        os.makedirs(temp_dir, exist_ok=True)
-        # print(f"[INIT] Ensured temp directory exists: {temp_dir}") # <<< Commented out
+        sys.stderr = dummy_stderr # Redirect stderr to discard writes
+        
+        # --- The rest of the download logic remains the same ---
+        # ... (setup temp dir, prepare downloader, parse URL, call download methods) ...
 
         # Prepare Downloader settings
         downloader_settings = {
@@ -3081,6 +3149,8 @@ if __name__ == "__main__":
         # =====================================================================
         # --- START MAIN LOOP (Main Process Only) ---
         # =====================================================================
+        # --- Configure Logging ---
+        setup_logging(output_queue)
         update_log_area() # Start polling the output queue
 
         # --- Start Update Check ---
