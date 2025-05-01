@@ -3016,7 +3016,7 @@ if __name__ == "__main__":
         module_buttons_data = [
             ("Apple Music", "https://github.com/yarrm80s/orpheusdl-applemusic-basic"),
             ("Beatport", "https://github.com/Dniel97/orpheusdl-beatport"),
-            ("Beatsource", "https://github.com/bascurtiz/orpheusdl-beatsource"), # <<< ADDED HERE
+            ("Beatsource", "https://github.com/bascurtiz/orpheusdl-beatsource"),
             ("Bugs", "https://github.com/Dniel97/orpheusdl-bugsmusic"),
             ("Deezer (acc)", "https://github.com/uhwot/orpheusdl-deezer"),
             ("Deezer (arl)", "https://github.com/thekvt/orpheusdl-deezer"),
