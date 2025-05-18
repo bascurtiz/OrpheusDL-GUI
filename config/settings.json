@@ -1,0 +1,147 @@
+{
+    "global": {
+        "advanced": {
+            "advanced_login_system": false,
+            "conversion_keep_original": false,
+            "cover_variance_threshold": 8,
+            "debug_mode": false,
+            "disable_subscription_checks": false,
+            "enable_undesirable_conversions": false,
+            "ignore_different_artists": true,
+            "ignore_existing_files": false
+        },
+        "artist_downloading": {
+            "return_credited_albums": true,
+            "separate_tracks_skip_downloaded": true
+        },
+        "codecs": {
+            "proprietary_codecs": false,
+            "spatial_codecs": true
+        },
+        "covers": {
+            "embed_cover": true,
+            "external_compression": "low",
+            "external_format": "png",
+            "external_resolution": 3000,
+            "main_compression": "high",
+            "main_resolution": 1400,
+            "save_animated_cover": true,
+            "save_external": false
+        },
+        "formatting": {
+            "album_format": "{name}{explicit}",
+            "enable_zfill": true,
+            "force_album_format": false,
+            "playlist_format": "{name}{explicit}",
+            "single_full_path_format": "{name}",
+            "track_filename_format": "{track_number}. {name}"
+        },
+        "general": {
+            "download_path": "D:\\github\\OrpheusDL-GUI\\Downloads",
+            "download_quality": "hifi",
+            "search_limit": 20
+        },
+        "lyrics": {
+            "embed_lyrics": true,
+            "embed_synced_lyrics": false,
+            "save_synced_lyrics": true
+        },
+        "module_defaults": {
+            "covers": "default",
+            "credits": "default",
+            "lyrics": "default"
+        },
+        "playlist": {
+            "extended_m3u": true,
+            "paths_m3u": "absolute",
+            "save_m3u": true
+        }
+    },
+    "modules": {
+        "applemusic": {
+            "email": "",
+            "force_region": "",
+            "get_original_cover": true,
+            "lyrics_custom_ms_sync": false,
+            "lyrics_language_override": "",
+            "lyrics_syllable_sync": false,
+            "lyrics_type": "standard",
+            "password": "",
+            "print_original_cover_url": false,
+            "selected_language": "en"
+        },
+        "beatport": {
+            "password": "",
+            "username": ""
+        },
+        "beatsource": {
+            "password": "",
+            "username": ""
+        },
+        "bugs": {
+            "password": "",
+            "username": ""
+        },
+        "deezer": {
+            "bf_secret": "",
+            "client_id": "",
+            "client_secret": "",
+            "email": "",
+            "password": ""
+        },
+        "idagio": {
+            "password": "",
+            "username": ""
+        },
+        "kkbox": {
+            "email": "",
+            "kc1_key": "",
+            "password": "",
+            "secret_key": ""
+        },
+        "musixmatch": {
+            "custom_time_decimals": false,
+            "lyrics_format": "standard",
+            "token_limit": 10
+        },
+        "napster": {
+            "api_key": "",
+            "customer_secret": "",
+            "password": "",
+            "requested_netloc": "",
+            "username": ""
+        },
+        "nugs": {
+            "client_id": "",
+            "dev_key": "",
+            "password": "",
+            "username": ""
+        },
+        "qobuz": {
+            "app_id": "",
+            "app_secret": "",
+            "password": "",
+            "quality_format": "{sample_rate}kHz {bit_depth}bit",
+            "username": ""
+        },
+        "soundcloud": {
+            "web_access_token": ""
+        },
+        "spotify": {
+            "client_id": "",
+            "client_secret": "",
+            "download_pause_seconds": 30,
+            "redirect_uri": "http://127.0.0.1:8888/callback",
+            "username": ""
+        },
+        "tidal": {
+            "enable_mobile": false,
+            "fix_mqa": true,
+            "mobile_atmos_hires_token": "",
+            "mobile_hires_token": "",
+            "prefer_ac4": false,
+            "tv_atmos_secret": "",
+            "tv_atmos_token": ""
+        }
+    }
+}

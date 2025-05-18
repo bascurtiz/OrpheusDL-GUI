@@ -43,6 +43,7 @@ import traceback # Add near other imports if not present
 import logging
 import shutil
 import webbrowser
+import atexit # <<< ADDED FOR TEMP DIR CLEANUP
 
 # --- Dummy Stderr Class ---
 class DummyStderr:
@@ -4090,5 +4091,20 @@ if __name__ == "__main__":
         # Exit immediately to prevent re-running GUI/initialization
         print(f"[Child Process {os.getpid()}] Detected, exiting.")
         sys.exit() # Crucial step
+
+    # --- Cleanup function for temp directory ---
+    def cleanup_temp_directory():
+        temp_dir_to_remove = "temp"
+        if os.path.exists(temp_dir_to_remove) and os.path.isdir(temp_dir_to_remove):
+            try:
+                shutil.rmtree(temp_dir_to_remove)
+                print(f"[Cleanup] Successfully removed temp directory: {temp_dir_to_remove}")
+            except Exception as e_cleanup:
+                print(f"[Cleanup] Error removing temp directory {temp_dir_to_remove}: {e_cleanup}")
+        else:
+            print(f"[Cleanup] Temp directory {temp_dir_to_remove} not found, no cleanup needed.")
+
+    # Register the cleanup function to be called on exit
+    atexit.register(cleanup_temp_directory)
 
 # --- End Of File ---
