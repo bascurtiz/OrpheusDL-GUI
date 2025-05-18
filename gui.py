@@ -41,6 +41,8 @@ from tqdm import tqdm
 from urllib.parse import urlparse
 import traceback # Add near other imports if not present
 import logging
+import shutil
+import webbrowser
 
 # --- Dummy Stderr Class ---
 class DummyStderr:
@@ -65,19 +67,197 @@ class QueueLogHandler(logging.Handler):
         # Access global settings to check debug mode for filtering
         global current_settings
 
+        # Get debug mode setting
+        is_debug_mode = current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False)
+
+        # If the log level is INFO, DEBUG, or WARNING, only show if debug_mode is ON
+        if record.levelno < logging.ERROR: # Covers INFO (20), DEBUG (10), and WARNING (30)
+            if not is_debug_mode:
+                return # Skip INFO/DEBUG/WARNING messages if debug_mode is OFF
+        # ERROR (40), CRITICAL (50) will pass through this check.
+
         # --- Filter specific Beatsource 404 warning if debug mode is OFF ---
+        # This specific warning is noisy, so we suppress it if not in debug.
+        # It might be useful in debug mode to understand why a playlist fetch failed.
         is_beatsource_404_warning = (
             record.name == 'root' and # Check for root logger
             record.levelname == 'WARNING' and
             "Fetching as playlist failed (404)" in record.getMessage()
         )
-        is_debug_mode = current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False)
-
         if is_beatsource_404_warning and not is_debug_mode:
             return # Skip emitting this specific warning
         # --- End filter ---
 
-        # Prepend log level to the message (for all other messages)
+        # --- Filter specific OggVorbisHeaderError warning if debug mode is OFF ---
+        is_ogg_header_error_warning = (
+            record.name == 'root' and
+            record.levelname == 'WARNING' and
+            "Ignoring mutagen OggVorbisHeaderError" in record.getMessage() and
+            "unable to read full header" in record.getMessage()
+        )
+        if is_ogg_header_error_warning and not is_debug_mode:  # Fixed variable name here
+            return # Skip emitting this specific warning
+        # --- End filter ---
+
+        # --- Filter specific "Web client not available" warning if debug mode is OFF ---
+        is_web_client_auth_warning = (
+            record.name == 'root' and
+            record.levelname == 'WARNING' and
+            "Web client not available for get_track_info" in record.getMessage() and
+            "Attempting authentication" in record.getMessage()
+        )
+        if is_web_client_auth_warning and not is_debug_mode:
+            return # Skip emitting this specific warning
+        # --- End filter ---
+
+        # --- Filter specific "Web client not available for get_album_info" warning if debug mode is OFF ---
+        is_album_info_auth_warning = (
+            record.name == 'root' and
+            record.levelname == 'WARNING' and
+            "Web client not available for get_album_info" in record.getMessage() and
+            "Attempting authentication" in record.getMessage()
+        )
+        if is_album_info_auth_warning and not is_debug_mode:
+            return # Skip emitting this specific warning
+        # --- End filter ---
+
+        # --- Filter specific Librespot PKCE 403 warning if debug mode is OFF ---
+        is_librespot_pkce_403_warning = (
+            record.name == 'root' and
+            record.levelname == 'WARNING' and
+            "Interactive PKCE OAuth: Librespot session creation failed with 403" in record.getMessage() and
+            "permission issue with token" in record.getMessage()
+        )
+        if is_librespot_pkce_403_warning and not is_debug_mode:
+            return # Skip emitting this specific warning
+        # --- End filter ---
+
+        # --- Filter specific "All applicable librespot authentication methods failed" error if debug mode is OFF ---
+        is_all_librespot_auth_failed_error = (
+            record.name == 'root' and
+            record.levelname == 'ERROR' and
+            "All applicable librespot authentication methods failed." in record.getMessage()
+        )
+        if is_all_librespot_auth_failed_error and not is_debug_mode:
+            return # Skip emitting this specific warning
+        # --- End filter ---
+
+        # --- Filter specific "Stream API authentication check failed for track" error if debug mode is OFF ---
+        is_stream_api_auth_check_failed_error = (
+            record.name == 'root' and
+            record.levelname == 'ERROR' and
+            "Stream API authentication check failed for track" in record.getMessage()
+        )
+        if is_stream_api_auth_check_failed_error and not is_debug_mode:
+            return # Skip emitting this specific warning
+        # --- End filter ---
+
+        # --- Filter specific Spotify 401 Client Error from spotipy.client if debug mode is OFF ---
+        is_spotipy_client_401_error = (
+            record.name == 'spotipy.client' and
+            record.levelname == 'ERROR' and
+            "returned 401 due to The access token expired" in record.getMessage()
+        )
+        if is_spotipy_client_401_error and not is_debug_mode:
+            return # Skip emitting this specific error
+        # --- End filter ---
+
+        # --- Filter specific Spotify API get album 401 Error from root logger if debug mode is OFF ---
+        is_spotify_api_get_album_401_error = (
+            record.name == 'root' and
+            record.levelname == 'ERROR' and
+            "Spotify API get album error: 401" in record.getMessage() and
+            "The access token expired" in record.getMessage()
+        )
+        if is_spotify_api_get_album_401_error and not is_debug_mode:
+            # Also suppress the associated traceback which might follow immediately
+            return # Skip emitting this specific error and likely its traceback lines
+        # --- End filter ---
+
+        # --- Filter specific "Authentication error during Spotify get_album_info: Spotify token became invalid" error if debug mode is OFF ---
+        is_spotify_get_album_auth_error = (
+            record.name == 'root' and
+            record.levelname == 'ERROR' and
+            "Authentication error during Spotify get_album_info: Spotify token became invalid." in record.getMessage()
+        )
+        if is_spotify_get_album_auth_error and not is_debug_mode:
+            return # Skip emitting this specific error
+        # --- End filter ---
+
+        # --- Filter specific "Track download attempt ... failed for" warning if debug mode is OFF ---
+        is_track_download_attempt_failed_warning = (
+            record.name == 'root' and
+            record.levelname == 'WARNING' and
+            "Track download attempt" in record.getMessage() and
+            "failed for" in record.getMessage()
+        )
+        if is_track_download_attempt_failed_warning and not is_debug_mode:
+            return # Skip emitting this specific warning
+        # --- End filter ---
+
+        # --- Filter specific "get_credited_albums not used" warning if debug mode is OFF ---
+        is_get_credited_albums_warning = (
+            record.name == 'root' and
+            record.levelname == 'WARNING' and
+            "'get_credited_albums' was passed to Spotify ModuleInterface.get_artist_info" in record.getMessage() and
+            "not directly used by the Spotify API call" in record.getMessage()
+        )
+        if is_get_credited_albums_warning and not is_debug_mode:
+            return # Skip emitting this specific warning
+        # --- End filter ---
+
+        # --- Filter specific "Web client not available for get_artist_info" warning if debug mode is OFF ---
+        is_artist_info_auth_warning = (
+            record.name == 'root' and
+            record.levelname == 'WARNING' and
+            "Web client not available for get_artist_info" in record.getMessage() and
+            "Attempting authentication" in record.getMessage()
+        )
+        if is_artist_info_auth_warning and not is_debug_mode:
+            return # Skip emitting this specific warning
+        # --- End filter ---
+
+        # --- Filter specific "Web client not available for get_playlist_info" warning if debug mode is OFF ---
+        is_playlist_info_auth_warning = (
+            record.name == 'root' and
+            record.levelname == 'WARNING' and
+            "Web client not available for get_playlist_info. Attempting authentication." in record.getMessage()
+        )
+        if is_playlist_info_auth_warning and not is_debug_mode:
+            return # Skip emitting this specific warning
+        # --- End filter ---
+
+        # --- Filter specific "Librespot:Session - Failed reading packet" critical if debug mode is OFF ---
+        is_librespot_packet_error = (
+            record.name == 'Librespot:Session' and
+            record.levelname == 'CRITICAL' and
+            record.getMessage() == "Failed reading packet! Failed to receive packet"
+        )
+        if is_librespot_packet_error and not is_debug_mode:
+            return # Skip emitting this specific critical error
+        # --- End filter ---
+
+        # --- Filter specific "MANUALLY PARSED stored file: unpack requires a buffer" warning if debug mode is OFF ---
+        is_librespot_unpack_warning = (
+            record.name == 'root' and
+            record.levelname == 'WARNING' and
+            "Error during librespot authentication from MANUALLY PARSED stored file: unpack requires a buffer of 4 bytes" in record.getMessage()
+        )
+        if is_librespot_unpack_warning and not is_debug_mode:
+            return # Skip emitting this specific warning
+        # --- End filter ---
+
+        # --- Filter specific "Timeout waiting for OAuth callback" warning if debug mode is OFF ---
+        is_oauth_timeout_warning = (
+            record.name == 'root' and
+            record.levelname == 'WARNING' and
+            "Timeout waiting for OAuth callback." in record.getMessage()
+        )
+        if is_oauth_timeout_warning and not is_debug_mode:
+            return # Skip emitting this specific warning
+        # --- End filter ---
+
+        # Prepend log level to the message (for all other messages that pass filters)
         log_entry = f"[{record.levelname}] {self.format(record)}"
         self.log_queue.put(log_entry)
 
@@ -103,12 +283,8 @@ def setup_logging(log_queue):
     if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
         logging.info("Logging configured to use GUI queue.")
 
-# Initial setup call (needs to happen before threads use logging)
-# We will call this later in the main execution block
-# setup_logging(output_queue)
-
 # Application Version
-__version__ = "1.0.3" # <<< Add version here
+__version__ = "1.0.4" # <<< Add version here
 
 # --- Import Update Checker ---
 from update_checker import run_check_in_thread
@@ -406,68 +582,85 @@ def deep_merge(dict1, dict2):
 # =============================================================================
 
 def load_settings():
-    """Loads settings directly from ./config/settings.json."""
-    # Access global variables defined within the main process block
+    """Loads settings, initializing from defaults if the file is missing or corrupt."""
     global current_settings, CONFIG_FILE_PATH, DEFAULT_SETTINGS
+    file_was_missing_or_corrupt = False
 
-    settings = {
-        "globals": copy.deepcopy(DEFAULT_SETTINGS["globals"]),
-        "credentials": {}
-    }
+    # Always start by setting current_settings to a deepcopy of DEFAULT_SETTINGS.
+    # This ensures all keys and structures are present.
+    current_settings = copy.deepcopy(DEFAULT_SETTINGS)
+    print("[Load Settings] Initialized current_settings with a deepcopy of DEFAULT_SETTINGS.")
 
     if not os.path.exists(CONFIG_FILE_PATH):
-        error_message = f"CRITICAL ERROR: Configuration file not found at '{CONFIG_FILE_PATH}'. Cannot start without settings."
-        print(error_message)
-        raise FileNotFoundError(error_message)
+        print(f"[Load Settings] '{CONFIG_FILE_PATH}' not found. Using full defaults. File will be created on first save.")
+        file_was_missing_or_corrupt = True
+        # current_settings is already defaulted, so we just return the flag.
+    else:
+        # File exists, try to load it and merge its values onto the defaulted current_settings.
+        temp_loaded_settings_from_file = {}
+        try:
+            with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as f:
+                temp_loaded_settings_from_file = json.load(f)
+            print(f"[Load Settings] Successfully loaded '{CONFIG_FILE_PATH}'. Merging onto defaults...")
 
-    try:
-        # <<< Wrap print in condition >>>
-        if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-            print(f"Directly reading settings from {CONFIG_FILE_PATH}...")
-        with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as f:
-            file_settings = json.load(f)
-        # <<< Wrap print in condition >>>
-        if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-            print("File read successfully.")
+            # Merge globals from loaded file into current_settings["globals"]
+            loaded_globals_from_file = temp_loaded_settings_from_file.get("global", {})
+            
+            # Specific mapping for general settings (Orpheus keys to GUI keys)
+            cs_general = current_settings["globals"].setdefault("general", {}) # Ensure general section exists
+            orpheus_general_from_file = loaded_globals_from_file.get("general", {})
+            if "download_path" in orpheus_general_from_file: cs_general["output_path"] = orpheus_general_from_file["download_path"]
+            if "download_quality" in orpheus_general_from_file: cs_general["quality"] = orpheus_general_from_file["download_quality"]
+            if "search_limit" in orpheus_general_from_file: cs_general["search_limit"] = orpheus_general_from_file["search_limit"]
+            # Add any other specific general key mappings here if needed
 
-        # Merge Globals
-        if "global" in file_settings:
-            orpheus_global_from_file = file_settings["global"]
-            if "general" in orpheus_global_from_file:
-                orpheus_general = orpheus_global_from_file["general"]
-                if "general" not in settings["globals"]: settings["globals"]["general"] = {}
-                if "download_path" in orpheus_general: settings["globals"]["general"]["output_path"] = orpheus_general["download_path"]
-                if "download_quality" in orpheus_general: settings["globals"]["general"]["quality"] = orpheus_general["download_quality"]
-                if "search_limit" in orpheus_general: settings["globals"]["general"]["search_limit"] = orpheus_general["search_limit"]
-            for section_key, section_data in orpheus_global_from_file.items():
-                 if section_key != "general" and section_key in settings["globals"]:
-                     if isinstance(section_data, dict) and isinstance(settings["globals"].get(section_key), dict):
-                         deep_merge(settings["globals"][section_key], section_data)
+            # Deep merge other global sections (assuming keys match between Orpheus 'global' and GUI 'globals')
+            for section_key, section_data_from_file in loaded_globals_from_file.items():
+                if section_key == "general": continue # Already handled
+                if section_key in current_settings["globals"] and isinstance(current_settings["globals"][section_key], dict) and isinstance(section_data_from_file, dict):
+                    deep_merge(current_settings["globals"][section_key], section_data_from_file)
 
-        # Merge Credentials
-        if "modules" in file_settings:
-            platform_map_from_orpheus = { "bugs": "BugsMusic", "nugs": "Nugs", "soundcloud": "SoundCloud", "tidal": "Tidal", "qobuz": "Qobuz", "deezer": "Deezer", "idagio": "Idagio", "kkbox": "KKBOX", "napster": "Napster", "beatport": "Beatport", "beatsource": "Beatsource", "musixmatch": "Musixmatch" } # <<< Added beatsource mapping
-            for orpheus_platform, creds_from_file in file_settings["modules"].items():
-                gui_platform = platform_map_from_orpheus.get(orpheus_platform)
-                if gui_platform and gui_platform in DEFAULT_SETTINGS["credentials"]:
-                    platform_defaults = copy.deepcopy(DEFAULT_SETTINGS["credentials"][gui_platform])
-                    deep_merge(platform_defaults, creds_from_file)
-                    settings["credentials"][gui_platform] = platform_defaults
+            # Merge credentials from loaded file into current_settings["credentials"]
+            loaded_modules_from_file = temp_loaded_settings_from_file.get("modules", {})
+            platform_map_from_orpheus = { "bugs": "BugsMusic", "nugs": "Nugs", "soundcloud": "SoundCloud", "tidal": "Tidal", "qobuz": "Qobuz", "deezer": "Deezer", "idagio": "Idagio", "kkbox": "KKBOX", "napster": "Napster", "beatport": "Beatport", "beatsource": "Beatsource", "musixmatch": "Musixmatch", "spotify": "Spotify", "applemusic": "AppleMusic" } # Ensure complete
+            
+            for orpheus_platform_key, creds_from_file in loaded_modules_from_file.items():
+                gui_platform_name = platform_map_from_orpheus.get(orpheus_platform_key)
+                if gui_platform_name and gui_platform_name in current_settings["credentials"]:
+                    # current_settings["credentials"][gui_platform_name] is already a copy of defaults.
+                    # Merge the fields from the file onto these defaults.
+                    deep_merge(current_settings["credentials"][gui_platform_name], creds_from_file)
+            
+            # Ensure 'download_pause_seconds' is an integer for all credential platforms after merging
+            for platform_creds_dict in current_settings.get("credentials", {}).values():
+                if "download_pause_seconds" in platform_creds_dict:
+                    try:
+                        platform_creds_dict["download_pause_seconds"] = int(str(platform_creds_dict["download_pause_seconds"]))
+                    except (ValueError, TypeError):
+                        # If conversion fails, find the original default for this platform (though it should be int in DEFAULT_SETTINGS)
+                        # For safety, ensure it's set to a known int default if type is wrong.
+                        # This step is mostly for robustness if settings.json had a bad string value.
+                        # Since we start with a deepcopy of DEFAULT_SETTINGS, this key should exist and be int.
+                        # A more robust way to get specific platform default if needed:
+                        # platform_key_for_default = [k for k, v in platform_map_from_orpheus.items() if v == gui_platform_name] # Needs reverse lookup
+                        # default_pause_val = DEFAULT_SETTINGS.get("credentials", {}).get(gui_platform_name, {}).get("download_pause_seconds", 26)
+                        # platform_creds_dict["download_pause_seconds"] = int(default_pause_val)
+                        pass # Assuming DEFAULT_SETTINGS had it as int, merged non-int will be caught by save_settings if problematic
 
-        # <<< Wrap print in condition >>>
-        if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-            print(f"Settings loaded and mapped from {CONFIG_FILE_PATH}")
+            print("[Load Settings] Merge complete.")
+        except (json.JSONDecodeError, IOError, TypeError, KeyError) as e:
+            print(f"[Load Settings] Error loading/parsing '{CONFIG_FILE_PATH}': {e}. current_settings remains as full defaults.")
+            # current_settings is already a deepcopy of DEFAULT_SETTINGS, so it's the fallback.
+            file_was_missing_or_corrupt = True
 
-    except (json.JSONDecodeError, IOError, TypeError, KeyError) as e:
-        print(f"Error loading/mapping '{CONFIG_FILE_NAME}': {e}")
-        print("Using default settings ONLY for globals. Credentials will be empty.")
-        settings = {
-            "globals": copy.deepcopy(DEFAULT_SETTINGS["globals"]),
-            "credentials": {}
-        }
+    # Ensure critical global 'output_path' is set if it somehow got wiped
+    # (shouldn't happen with the initial deepcopy from DEFAULT_SETTINGS)
+    general_globals = current_settings.setdefault("globals", {}).setdefault("general", {})
+    if "output_path" not in general_globals or not general_globals["output_path"]:
+        general_globals["output_path"] = DEFAULT_SETTINGS["globals"]["general"]["output_path"]
+        print("[Load Settings] Ensured default output_path is present in current_settings.")
 
-    current_settings = settings
-    return settings
+    return file_was_missing_or_corrupt
 
 def initialize_orpheus():
     """Attempts to initialize the global Orpheus instance."""
@@ -483,18 +676,29 @@ def initialize_orpheus():
             # <<< Wrap print in condition >>>
             if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
                 print("Initializing global Orpheus instance...")
-            orpheus_instance = Orpheus()
+            orpheus_instance = Orpheus() # Orpheus core instance is created here
+
+            # <<< REGISTER GUI HANDLERS HERE >>>
+            if orpheus_instance: # Ensure instance creation was successful
+                if hasattr(orpheus_instance, 'register_gui_handler'):
+                    orpheus_instance.register_gui_handler('show_spotify_auth_dialog', show_spotify_web_api_auth_dialog)
+                    logging.info("[GUI InitializeOrpheus] Registered 'show_spotify_auth_dialog' handler.")
+                    # Log the handlers for verification
+                    logging.info(f"[GUI InitializeOrpheus] Orpheus instance gui_handlers: {getattr(orpheus_instance, 'gui_handlers', 'N/A')}")
+                else:
+                    logging.warning("[GUI InitializeOrpheus] Orpheus instance does not have 'register_gui_handler' method. Spotify auth dialog will not be available.")
+            else:
+                logging.error("[GUI InitializeOrpheus] Failed to register GUI handlers because orpheus_instance is None after creation attempt.")
+
             # <<< Wrap print in condition >>>
             if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
                 print("Global Orpheus instance initialized successfully.")
-            # Optional: Keep the warning if extensions might still be relevant?
-            # print("[Warning] Orpheus initialized without explicit data_path. 'extensions' folder might still cause issues.")
             return True
         except Exception as e:
             # Catch any general initialization errors
             import traceback
             tb_str = traceback.format_exc()
-            error_message = f"FATAL: Failed to initialize Orpheus library: {e}\\nTraceback:\\n{tb_str}"
+            error_message = f"FATAL: Failed to initialize Orpheus library: {e}\\\\nTraceback:\\\\n{tb_str}"
 
             print(error_message)
             try: # Try to show error in GUI (check if app exists)
@@ -525,20 +729,20 @@ def save_settings(show_confirmation: bool = True):
     # --- Start of actual logic (replacing the placeholder above) ---
     # Access global variables defined within the main process block
     global settings_vars, current_settings, DEFAULT_SETTINGS, CONFIG_FILE_PATH, orpheus_instance
-    print("[Save Settings] Starting load-merge-save process...")
+    logging.debug("[Save Settings] Starting load-merge-save process...")
 
     # --- 1. Load Existing Settings File ---
     existing_settings = {}
     try:
         if os.path.exists(CONFIG_FILE_PATH):
             with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as f: existing_settings = json.load(f)
-            print(f"[Save Settings] Loaded existing settings from {CONFIG_FILE_PATH}")
+            logging.debug(f"[Save Settings] Loaded existing settings from {CONFIG_FILE_PATH}")
         else:
-            print(f"[Save Settings] No existing settings file found at {CONFIG_FILE_PATH}. Will create a new one.")
+            logging.debug(f"[Save Settings] No existing settings file found at {CONFIG_FILE_PATH}. Will create a new one.")
             existing_settings = { "global": {"general": {},"formatting": {},"codecs": {},"covers": {},"playlist": {},"advanced": {},"module_defaults": {},"artist_downloading": {},"lyrics": {}}, "modules": {} }
     except (json.JSONDecodeError, IOError) as e:
         error_message = f"Error loading existing settings file '{CONFIG_FILE_PATH}':\\n{type(e).__name__}: {e}. Cannot proceed with save."
-        print(f"[Save Settings] {error_message}", exc_info=True)
+        logging.error(f"[Save Settings] {error_message}", exc_info=True)
         show_centered_messagebox("Settings Error", error_message, dialog_type="error")
         return False
 
@@ -579,7 +783,7 @@ def save_settings(show_confirmation: bool = True):
             elif original_value is None: final_value = str(raw_value)
             else: final_value = str(raw_value)
             current_data[setting_key] = final_value
-        except Exception as e: error_msg = f"Error processing global setting '{key_path_str}': {e}"; print(f"[Save Settings] {error_msg}", exc_info=True); parse_errors.append(error_msg)
+        except Exception as e: error_msg = f"Error processing global setting '{key_path_str}': {e}"; logging.error(f"[Save Settings] {error_msg}", exc_info=True); parse_errors.append(error_msg)
     # Credentials
     for platform_name, fields in settings_vars.get("credentials", {}).items():
          if platform_name not in updated_gui_settings["credentials"]: updated_gui_settings["credentials"][platform_name] = {}
@@ -591,7 +795,7 @@ def save_settings(show_confirmation: bool = True):
     if parse_errors:
          error_list = "\n - ".join(parse_errors)
          show_centered_messagebox("Settings Error", f"Could not save due to invalid values:\n - {error_list}", dialog_type="error")
-         print(f"[Save Settings] Validation failed: {error_list}")
+         logging.warning(f"[Save Settings] Validation failed: {error_list}")
          return False
 
     # --- 4. Map Validated UI data to Orpheus Structure ---
@@ -608,35 +812,83 @@ def save_settings(show_confirmation: bool = True):
              if isinstance(section_data, dict) and isinstance(mapped_orpheus_updates["global"].get(section_key), dict):
                   if section_key not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"][section_key] = {}
                   for item_key, item_value in section_data.items(): mapped_orpheus_updates["global"][section_key][item_key] = item_value
-    platform_map_to_orpheus = { "BugsMusic": "bugs", "Nugs": "nugs", "SoundCloud": "soundcloud", "Tidal": "tidal", "Qobuz": "qobuz", "Deezer": "deezer", "Idagio": "idagio", "KKBOX": "kkbox", "Napster": "napster", "Beatport": "beatport", "Beatsource": "beatsource", "Musixmatch": "musixmatch" }
-    for gui_platform, creds in updated_gui_settings.get("credentials", {}).items():
-        orpheus_platform = platform_map_to_orpheus.get(gui_platform)
-        if orpheus_platform:
-            if orpheus_platform not in mapped_orpheus_updates["modules"]: mapped_orpheus_updates["modules"][orpheus_platform] = {}
-            mapped_orpheus_updates["modules"][orpheus_platform] = creds.copy()
+
+    # Map credentials
+    platform_map_to_orpheus = { "BugsMusic": "bugs", "Nugs": "nugs", "SoundCloud": "soundcloud", "Tidal": "tidal", "Qobuz": "qobuz", "Deezer": "deezer", "Idagio": "idagio", "KKBOX": "kkbox", "Napster": "napster", "Beatport": "beatport", "Beatsource": "beatsource", "Musixmatch": "musixmatch", "Spotify": "spotify", "AppleMusic": "applemusic" } # Ensure AppleMusic is mapped if it's in defaults
+
+    # Iterate over ALL platforms defined in DEFAULT_SETTINGS to ensure all are processed
+    for gui_platform_default_key in DEFAULT_SETTINGS.get("credentials", {}).keys():
+        orpheus_platform = platform_map_to_orpheus.get(gui_platform_default_key)
+        if not orpheus_platform:
+            logging.warning(f"[Save Settings Warning] No Orpheus mapping for default GUI platform: {gui_platform_default_key}")
+            continue
+
+        if "modules" not in mapped_orpheus_updates: mapped_orpheus_updates["modules"] = {}
+
+        # 1. Start with a deepcopy of the *current_settings* for this platform.
+        # This preserves values loaded from file or set by auth, unless overridden by GUI.
+        if gui_platform_default_key in current_settings.get("credentials", {}):
+            final_platform_creds = copy.deepcopy(current_settings["credentials"][gui_platform_default_key])
+        else:
+            # Fallback to DEFAULT_SETTINGS if, for some reason, it's not in current_settings (should be rare)
+            final_platform_creds = copy.deepcopy(DEFAULT_SETTINGS["credentials"][gui_platform_default_key])
+
+        # 2. Try to get values from the GUI (if the tab was viewed and settings_vars populated)
+        creds_from_gui = updated_gui_settings.get("credentials", {}).get(gui_platform_default_key)
+
+        if creds_from_gui:  # If tab was viewed and vars exist for this platform
+            for key, value_str_from_gui in creds_from_gui.items():
+                # Get the type from DEFAULT_SETTINGS to guide conversion, but apply to final_platform_creds
+                default_type_val_at_key = DEFAULT_SETTINGS["credentials"].get(gui_platform_default_key, {}).get(key)
+                
+                if key in final_platform_creds: # Update existing keys
+                    if isinstance(default_type_val_at_key, bool):
+                        try: final_platform_creds[key] = bool(int(value_str_from_gui))
+                        except ValueError: final_platform_creds[key] = (str(value_str_from_gui).lower() == 'true')
+                    elif isinstance(default_type_val_at_key, int) and key != "download_pause_seconds":
+                        try: final_platform_creds[key] = int(value_str_from_gui)
+                        except ValueError: 
+                            # If conversion fails, keep the existing value in final_platform_creds (which came from current_settings)
+                            pass # logging.debug(f"[Save Settings] Invalid int '{value_str_from_gui}' for {gui_platform_default_key}.{key}, keeping existing.")
+                    else: # Handles strings and download_pause_seconds (which is specifically handled next)
+                        final_platform_creds[key] = value_str_from_gui
+                else: # Key from GUI not in current_settings structure for this platform (should be rare)
+                    final_platform_creds[key] = value_str_from_gui
+        
+        # 3. Specific type conversion for download_pause_seconds (ensure it's an int)
+        # This needs to operate on final_platform_creds which might have a string from GUI
+        if "download_pause_seconds" in final_platform_creds:
+            try:
+                final_platform_creds["download_pause_seconds"] = int(str(final_platform_creds["download_pause_seconds"]))
+            except (ValueError, TypeError):
+                # Fallback to the default from DEFAULT_SETTINGS if conversion fails
+                default_pause = DEFAULT_SETTINGS.get("credentials", {}).get(gui_platform_default_key, {}).get("download_pause_seconds", 26)
+                final_platform_creds["download_pause_seconds"] = int(default_pause)
+
+        mapped_orpheus_updates["modules"][orpheus_platform] = final_platform_creds
 
     # --- 5. Deep Merge Mapped Updates into Existing Settings ---
-    print("[Save Settings] Merging validated UI changes into existing settings structure...")
+    logging.debug("[Save Settings] Merging validated UI changes into existing settings structure...")
     final_settings_to_save = deep_merge(existing_settings, mapped_orpheus_updates)
 
     # --- 6. Perform the Direct File Write ---
     try:
-        print(f"[Save Settings] Attempting to write merged settings to {CONFIG_FILE_PATH}")
+        logging.debug(f"[Save Settings] Attempting to write merged settings to {CONFIG_FILE_PATH}")
         config_dir = os.path.dirname(CONFIG_FILE_PATH)
-        if not os.path.exists(config_dir): os.makedirs(config_dir); print(f"[Save Settings] Created config directory: {config_dir}")
+        if not os.path.exists(config_dir): os.makedirs(config_dir); logging.info(f"[Save Settings] Created config directory: {config_dir}")
         with open(CONFIG_FILE_PATH, 'w', encoding='utf-8') as f: json.dump(final_settings_to_save, f, indent=4, ensure_ascii=False, sort_keys=True)
-        print(f"[Save Settings] Settings successfully written to {CONFIG_FILE_PATH}.")
+        logging.info(f"[Save Settings] Settings successfully written to {CONFIG_FILE_PATH}.")
 
         # --- 7. Update in-memory current_settings AFTER successful save ---
-        print("[Save Settings] Updating in-memory 'current_settings' from GUI values...")
+        logging.debug("[Save Settings] Updating in-memory 'current_settings' from GUI values...")
         deep_merge(current_settings, updated_gui_settings)
-        print("[Save Settings] In-memory 'current_settings' updated.")
+        logging.debug("[Save Settings] In-memory 'current_settings' updated.")
 
         # --- 8. Re-initialize Orpheus instance AFTER successful save ---
-        print("[Save Settings] Re-initializing Orpheus instance with updated settings...")
+        logging.info("[Save Settings] Re-initializing Orpheus instance with updated settings...")
         orpheus_instance = None # Clear the existing instance
         initialize_orpheus()
-        print("[Save Settings] Orpheus instance re-initialized.")
+        logging.info("[Save Settings] Orpheus instance re-initialized.")
 
         # <<< Show confirmation only if requested >>>
         if show_confirmation:
@@ -649,7 +901,7 @@ def save_settings(show_confirmation: bool = True):
         log_file_path = os.path.join(os.getcwd(), 'error_log.txt')
         error_message = f"Error writing settings file '{CONFIG_FILE_PATH}':\\n{type(e).__name__}: {e}"
         full_traceback = traceback.format_exc()
-        print(f"[Save Settings] {error_message}", exc_info=False) # Avoid double printing traceback
+        logging.error(f"[Save Settings] {error_message}") # Avoid double printing traceback
         try:
             with open(log_file_path, 'a', encoding='utf-8') as log_f:
                 log_f.write(f"--- Error during settings save (IOError) ---\\n")
@@ -658,7 +910,7 @@ def save_settings(show_confirmation: bool = True):
                 log_f.write("---------------------------------------------\\n")
             error_message_for_dialog = f"{error_message}\\n\\nSee 'error_log.txt' in the application folder for details."
         except Exception as log_e:
-            print(f"[Save Settings] CRITICAL: Failed to write to error log file: {log_e}")
+            logging.critical(f"[Save Settings] CRITICAL: Failed to write to error log file: {log_e}")
             error_message_for_dialog = f"{error_message}\\n\\n(Failed to write details to error_log.txt)"
         # <<< Use modified error message >>>
         show_centered_messagebox("Settings Error", error_message_for_dialog, dialog_type="error")
@@ -668,7 +920,7 @@ def save_settings(show_confirmation: bool = True):
         log_file_path = os.path.join(os.getcwd(), 'error_log.txt')
         error_message = f"Unexpected error saving settings:\\n{type(e).__name__}: {e}"
         full_traceback = traceback.format_exc()
-        print(f"[Save Settings] {error_message}", exc_info=False) # Avoid double printing traceback
+        logging.error(f"[Save Settings] {error_message}") # Avoid double printing traceback
         try:
             with open(log_file_path, 'a', encoding='utf-8') as log_f:
                 log_f.write(f"--- Error during settings save (Exception) ---\\n")
@@ -677,7 +929,7 @@ def save_settings(show_confirmation: bool = True):
                 log_f.write("----------------------------------------------\\n")
             error_message_for_dialog = f"{error_message}\\n\\nSee 'error_log.txt' in the application folder for details."
         except Exception as log_e:
-            print(f"[Save Settings] CRITICAL: Failed to write to error log file: {log_e}")
+            logging.critical(f"[Save Settings] CRITICAL: Failed to write to error log file: {log_e}")
             error_message_for_dialog = f"{error_message}\\n\\n(Failed to write details to error_log.txt)"
         # <<< Use modified error message >>>
         show_centered_messagebox("Settings Error", error_message_for_dialog, dialog_type="error")
@@ -690,12 +942,12 @@ def handle_save_settings():
     global save_status_var, app
 
     try:
-        print("[Handle Save] Calling save_settings function with confirmation...")
+        logging.debug("[Handle Save] Calling save_settings function with confirmation...")
         # <<< Call save_settings with show_confirmation=True >>>
         save_attempt_successful = save_settings(show_confirmation=True)
-        print(f"[Handle Save] save_settings returned: {save_attempt_successful}")
+        logging.debug(f"[Handle Save] save_settings returned: {save_attempt_successful}")
 
-        print("[Handle Save] Refreshing UI from updated in-memory settings...")
+        logging.debug("[Handle Save] Refreshing UI from updated in-memory settings...")
         # Ensure app exists before scheduling
         if 'app' in globals() and app and app.winfo_exists():
             app.after(50, _update_settings_tab_widgets)
@@ -714,7 +966,7 @@ def handle_save_settings():
         if 'save_status_var' in globals() and save_status_var:
             save_status_var.set(f"Error handling save: {type(e).__name__}")
         show_centered_messagebox("Save Error", err_msg, dialog_type="error")
-        print(f"[DEBUG] Error in handle_save_settings: {err_msg}", exc_info=True)
+        logging.error(f"Error in handle_save_settings: {err_msg}", exc_info=True)
     finally:
         # Ensure app and var exist before scheduling clear
         if 'app' in globals() and app and app.winfo_exists() and 'save_status_var' in globals() and save_status_var:
@@ -783,7 +1035,7 @@ def _auto_save_path_change(*args):
         log_file_path = os.path.join(os.getcwd(), 'error_log.txt')
         err_msg = f"Error during automatic path save handling:\\n{type(e).__name__}: {e}"
         full_traceback = traceback.format_exc()
-        print(f"[Auto Save Path] Error: {err_msg}", exc_info=False) # Avoid double printing traceback
+        logging.error(f"[Auto Save Path] Error: {err_msg}") # Avoid double printing traceback
 
         try:
             with open(log_file_path, 'a', encoding='utf-8') as log_f:
@@ -793,7 +1045,7 @@ def _auto_save_path_change(*args):
                 log_f.write("--------------------------------------------\\n")
             error_message_for_dialog = f"{err_msg}\\n\\nSee 'error_log.txt' in the application folder for details."
         except Exception as log_e:
-            print(f"[Auto Save Path] CRITICAL: Failed to write to error log file: {log_e}")
+            logging.critical(f"[Auto Save Path] CRITICAL: Failed to write to error log file: {log_e}")
             error_message_for_dialog = f"{err_msg}\\n\\n(Failed to write details to error_log.txt)"
 
         # Update status label if possible
@@ -964,6 +1216,202 @@ def paste_text():
     except Exception as e: print(f"Error pasting text: {e}", exc_info=True)
     finally: hide_context_menu()
 
+# --- Variables for Spotify Dialog Context Menu (module level) ---
+_spotify_dialog_context_menu_frame = None
+_spotify_dialog_target_widget = None
+_spotify_dialog_hide_menu_binding_id = None
+
+# --- Helper Functions for Spotify Dialog Context Menu ---
+def _create_spotify_dialog_context_menu(parent_dialog):
+    """Creates the context menu frame as a child of the parent_dialog."""
+    global _spotify_dialog_context_menu_frame, BUTTON_COLOR # Access global vars
+    
+    # Explicit check before use
+    if not parent_dialog or not parent_dialog.winfo_exists() or not isinstance(parent_dialog, customtkinter.CTkToplevel):
+        return
+
+    # If menu already exists and is valid, do nothing
+    if _spotify_dialog_context_menu_frame and \
+       isinstance(_spotify_dialog_context_menu_frame, customtkinter.CTkBaseClass) and \
+       _spotify_dialog_context_menu_frame.winfo_exists():
+        return
+    
+    _spotify_dialog_context_menu_frame = customtkinter.CTkFrame(parent_dialog, border_width=1, border_color="#565B5E")
+    
+    copy_button = customtkinter.CTkButton(
+        _spotify_dialog_context_menu_frame, text="Copy", 
+        command=lambda pd=parent_dialog: _copy_text_for_spotify_dialog(pd), 
+        width=100, height=28, fg_color=BUTTON_COLOR, hover_color="#1F6AA5", 
+        text_color_disabled="gray", border_width=0
+    )
+    copy_button.pack(pady=(2, 1), padx=2, fill="x")
+    
+    paste_button = customtkinter.CTkButton(
+        _spotify_dialog_context_menu_frame, text="Paste", 
+        command=lambda pd=parent_dialog: _paste_text_for_spotify_dialog(pd), 
+        width=100, height=28, fg_color=BUTTON_COLOR, hover_color="#1F6AA5", 
+        text_color_disabled="gray", border_width=0
+    )
+    paste_button.pack(pady=(1, 2), padx=2, fill="x")
+    
+    _spotify_dialog_context_menu_frame.pack_forget() # Hide it initially
+
+def _copy_text_for_spotify_dialog(parent_dialog):
+    """Copies text from the Spotify dialog's entry widget to the clipboard."""
+    global _spotify_dialog_target_widget
+    
+    if not _spotify_dialog_target_widget:
+        return
+
+    try:
+        # Get the text from the entry widget
+        text_to_copy = _spotify_dialog_target_widget.get()
+        if text_to_copy:
+            # Clear the clipboard and set the new text
+            parent_dialog.clipboard_clear()
+            parent_dialog.clipboard_append(text_to_copy)
+    except Exception:
+        pass
+    finally:
+        # Hide the context menu after copying
+        _hide_spotify_dialog_context_menu(parent_dialog)
+
+def _paste_text_for_spotify_dialog(parent_dialog):
+    """Pastes text from the clipboard into the Spotify dialog's entry widget."""
+    global _spotify_dialog_target_widget
+    
+    if not _spotify_dialog_target_widget:
+        return
+
+    try:
+        # Get the text from the clipboard
+        clipboard_text = parent_dialog.clipboard_get()
+        if clipboard_text:
+            # Insert the text at the current cursor position
+            _spotify_dialog_target_widget.delete(0, "end")
+            _spotify_dialog_target_widget.insert(0, clipboard_text)
+    except Exception:
+        pass
+    finally:
+        # Hide the context menu after pasting
+        _hide_spotify_dialog_context_menu(parent_dialog)
+
+def _show_spotify_dialog_context_menu(event, parent_dialog, target_entry_widget):
+    """Shows the context menu for the Spotify dialog's entry widget."""
+    global _spotify_dialog_context_menu_frame, _spotify_dialog_target_widget, _spotify_dialog_hide_menu_binding_id
+
+    if not parent_dialog or not parent_dialog.winfo_exists() or not isinstance(parent_dialog, customtkinter.CTkToplevel): 
+        return
+
+    _create_spotify_dialog_context_menu(parent_dialog) 
+    if not _spotify_dialog_context_menu_frame:
+        return
+
+    _spotify_dialog_target_widget = target_entry_widget # Set the target widget
+
+    can_copy = False
+    can_paste = False
+    has_selection = False
+    clipboard_has_text = False
+
+    try: # Check clipboard content
+        clipboard_content = parent_dialog.clipboard_get()
+        if isinstance(clipboard_content, str) and clipboard_content:
+            clipboard_has_text = True
+    except tkinter.TclError: pass 
+    except Exception: pass
+
+    try: # Determine copy/paste availability
+        if _spotify_dialog_target_widget._entry.selection_present(): # Check selection in underlying Tk entry
+            has_selection = True
+        
+        can_copy = has_selection or bool(_spotify_dialog_target_widget.get())
+        
+        widget_state = 'disabled'
+        if hasattr(_spotify_dialog_target_widget, 'cget') and callable(_spotify_dialog_target_widget.cget):
+            widget_state = _spotify_dialog_target_widget.cget("state")
+        can_paste = (widget_state == "normal") and clipboard_has_text
+    except Exception: pass
+
+    try: # Configure and place the menu
+        menu_children = _spotify_dialog_context_menu_frame.winfo_children()
+        if len(menu_children) >= 2 and \
+           isinstance(menu_children[0], customtkinter.CTkButton) and \
+           isinstance(menu_children[1], customtkinter.CTkButton):
+            copy_btn, paste_btn = menu_children[0], menu_children[1]
+            copy_btn.configure(state="normal" if can_copy else "disabled")
+            paste_btn.configure(state="normal" if can_paste else "disabled")
+        else:
+            return
+
+        # Calculate position relative to the dialog window
+        menu_x = event.x_root - parent_dialog.winfo_rootx() + 2
+        menu_y = event.y_root - parent_dialog.winfo_rooty() + 2
+
+        # Place the menu frame
+        _spotify_dialog_context_menu_frame.place(x=menu_x, y=menu_y)
+        
+        # Make sure the menu is visible and on top
+        _spotify_dialog_context_menu_frame.lift()
+        _spotify_dialog_context_menu_frame.update()
+
+        # Bind left-click on the dialog itself to hide the menu, but only if not clicking the menu
+        if _spotify_dialog_hide_menu_binding_id is None:
+            def hide_menu_if_outside(event):
+                if _spotify_dialog_context_menu_frame and _spotify_dialog_context_menu_frame.winfo_exists():
+                    try:
+                        click_widget = parent_dialog.winfo_containing(event.x_root, event.y_root)
+                        if click_widget != _spotify_dialog_context_menu_frame and \
+                           not (hasattr(click_widget, 'master') and click_widget.master == _spotify_dialog_context_menu_frame):
+                            _hide_spotify_dialog_context_menu(parent_dialog, event)
+                    except tkinter.TclError:
+                        pass
+                    except Exception:
+                        pass
+
+            _spotify_dialog_hide_menu_binding_id = parent_dialog.bind(
+                "<Button-1>", 
+                hide_menu_if_outside, 
+                add=True
+            )
+    except tkinter.TclError: pass
+    except Exception: pass
+
+def _hide_spotify_dialog_context_menu(parent_dialog, event=None):
+    """Hides the Spotify dialog context menu and unbinds the hide event."""
+    global _spotify_dialog_context_menu_frame, _spotify_dialog_target_widget, _spotify_dialog_hide_menu_binding_id
+    
+    if not parent_dialog or not parent_dialog.winfo_exists(): 
+        return
+
+    # If the click is inside the context menu itself, don't hide it
+    if event and _spotify_dialog_context_menu_frame and \
+       isinstance(_spotify_dialog_context_menu_frame, customtkinter.CTkBaseClass) and \
+       _spotify_dialog_context_menu_frame.winfo_exists():
+        try:
+            click_widget = parent_dialog.winfo_containing(event.x_root, event.y_root)
+            if click_widget == _spotify_dialog_context_menu_frame or \
+               (hasattr(click_widget, 'master') and click_widget.master == _spotify_dialog_context_menu_frame):
+                return
+        except tkinter.TclError: pass
+        except Exception: pass
+
+    if _spotify_dialog_context_menu_frame and \
+       isinstance(_spotify_dialog_context_menu_frame, customtkinter.CTkBaseClass) and \
+       _spotify_dialog_context_menu_frame.winfo_exists():
+        _spotify_dialog_context_menu_frame.place_forget()
+        _spotify_dialog_context_menu_frame = None
+
+    if _spotify_dialog_hide_menu_binding_id:
+        try:
+            parent_dialog.unbind("<Button-1>", _spotify_dialog_hide_menu_binding_id)
+        except tkinter.TclError: pass
+        except Exception: pass
+        finally:
+            _spotify_dialog_hide_menu_binding_id = None
+    
+    _spotify_dialog_target_widget = None
+
 # --- Output Log Handling ---
 def log_to_textbox(msg, error=False):
     # Access global variables defined within the main process block
@@ -1132,18 +1580,31 @@ def _check_and_toggle_scrollbar(tree_widget, scrollbar_widget):
 class QueueWriter(io.TextIOBase):
     # NOTE: This QueueWriter remains useful for capturing direct print() statements
     # that might still exist or be added later, distinct from logging.
-    def __init__(self, queue_instance): self.queue = queue_instance
+    def __init__(self, queue_instance, gui_settings): # Added gui_settings
+        self.queue = queue_instance
+        self.gui_settings = gui_settings # Store gui_settings
 
     def write(self, msg):
         # Access global 'output_queue' defined in main process block
         # No, QueueWriter is instantiated with the queue, so it uses self.queue
         msg_strip = msg.lstrip()
 
+        # Get debug mode setting from instance variable
+        is_debug_mode = self.gui_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False)
+
         # Filter out JioSaavn warning and error messages
         if "[JioSaavn Warning] Accessing song data using the first key as fallback." in msg_strip:
             return len(msg)
         if "AttributeError: 'OrpheusOptions' object has no attribute 'global_settings'" in msg_strip:
             return len(msg)
+
+        # Filter for verbose "Processing album track TrackInfo(...)" line
+        if msg_strip.startswith("Processing album track ") and "TrackInfo(name=" in msg_strip and not is_debug_mode:
+            return len(msg) # Skip this specific verbose line if debug mode is OFF
+
+        # Filter for "[Spotify Error] Stream API authentication failed..." line
+        if msg_strip.startswith("[Spotify Error] Stream API authentication failed or credentials not found.") and not is_debug_mode:
+            return len(msg) # Skip this specific error line if debug mode is OFF
 
         is_fetching_line = False
         if msg_strip.startswith("Fetching "):
@@ -1206,7 +1667,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
 
     original_stdout = sys.stdout
     original_stderr = sys.stderr
-    queue_writer = QueueWriter(output_queue) # Keep QueueWriter for direct print() calls
+    queue_writer = QueueWriter(output_queue, gui_settings) # Pass gui_settings
     dummy_stderr = DummyStderr() # Create instance of dummy stderr
     is_cancelled = False
     download_exception_occurred = False # <<< Flag to track download errors
@@ -1217,9 +1678,11 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         sys.stdout = queue_writer
         sys.stderr = dummy_stderr # Redirect stderr to discard writes
         
-        # --- The rest of the download logic remains the same ---
-        # ... (setup temp dir, prepare downloader, parse URL, call download methods) ...
-
+        # Create temp directory in the same directory as the script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        temp_dir = os.path.join(script_dir, 'temp')
+        os.makedirs(temp_dir, exist_ok=True)
+        
         # Prepare Downloader settings
         downloader_settings = {
             "general": {
@@ -1232,8 +1695,14 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         module_controls_dict = orpheus.module_controls
         oprinter = Oprinter()
 
-        # Initialize Downloader
+        # Initialize downloader with temp directory
         downloader = Downloader(settings=downloader_settings, module_controls=module_controls_dict, oprinter=oprinter, path=output_path)
+        downloader.temp_dir = temp_dir  # Pass temp directory to downloader
+        
+        # --- The rest of the download logic remains the same ---
+        # ... (setup temp dir, prepare downloader, parse URL, call download methods) ...
+
+        # Initialize Downloader
         settings_global_for_defaults = gui_settings.get("globals", DEFAULT_SETTINGS["globals"])
         module_defaults = settings_global_for_defaults.get("module_defaults", {})
         third_party_modules_dict = { ModuleModes.lyrics: module_defaults.get("lyrics") if module_defaults.get("lyrics") != "default" else None, ModuleModes.covers: module_defaults.get("covers") if module_defaults.get("covers") != "default" else None, ModuleModes.credits: module_defaults.get("credits") if module_defaults.get("credits") != "default" else None }
@@ -1288,9 +1757,9 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                 # <<< Force media_id to be the LAST component >>>
                 if len(components) > 1:
                     media_id = components[-1]
-                    # <<< NEW IMMEDIATE DEBUG PRINT >>>
-                    print(f"[URL Parse - Immediate Check] media_id assigned as: '{media_id}' from components: {components}")
-                    # <<< END NEW IMMEDIATE DEBUG PRINT >>>
+                    # <<< ADDING DEBUG CONDITION HERE >>>
+                    if gui_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                        print(f"[URL Parse - Immediate Check] media_id assigned as: '{media_id}' from components: {components}")
                 else:
                     raise ValueError(f"Could not determine media ID from URL path: {parsed_url.path}")
                 # <<< END Force ID >>>
@@ -1327,7 +1796,9 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                 media_type = type_matches[-1]
                 if len(components) > 1:
                     media_id = components[-1]
-                    print(f"[URL Parse - General Fallback Check] media_id assigned as: '{media_id}' from components: {components}")
+                    # <<< WRAPPED IN CONDITION >>>
+                    if gui_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                        print(f"[URL Parse - General Fallback Check] media_id assigned as: '{media_id}' from components: {components}")
                 else:
                     raise ValueError(f"Could not determine media ID from URL path: {parsed_url.path}")
                 if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
@@ -1513,7 +1984,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         download_exception_occurred = True # <<< Mark exception occurred
         if isinstance(e, DownloadCancelledError):
              is_cancelled = True; download_exception_occurred = False # Cancellation is not an error for the sound
-             print("\nDownload Cancelled (during file transfer).")
+             print("\nDownload explicitly cancelled during an operation.") # Changed message
         else: error_type = type(e).__name__; print(f"\nERROR: {error_type}.\nDetails: {e}\n")
     except Exception as e:
         download_exception_occurred = True # <<< Mark exception occurred
@@ -1525,8 +1996,21 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         summary_message = f"{final_status_message}\nTotal time taken: {formatted_time}\n"
         print(summary_message)
 
+        # Add the extra newline directly to output_queue here
+        if 'output_queue' in globals() and output_queue: # Check if output_queue exists
+            output_queue.put("\n") # This will be processed by log_to_textbox
+
+        # Restore stdout and stderr
         sys.stdout = original_stdout
         sys.stderr = original_stderr
+        
+        # Clean up temp directory
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+            
+        # Ensure app exists before scheduling UI reset
+        if 'app' in globals() and app and app.winfo_exists():
+            app.after(0, lambda: set_ui_state_downloading(False))
 
         download_successful = not is_cancelled and not download_exception_occurred # <<< Determine success
 
@@ -1534,6 +2018,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         def final_ui_update(success=False):
             # Access global widgets/state needed for UI update and queue check
             global progress_bar, stop_button, download_process_active, app, file_download_queue, current_batch_output_path, current_settings, DEFAULT_SETTINGS
+            global _batch_start_time # <<< ADDED
 
             try:
                 # Reset UI elements (ProgressBar, Stop Button) that apply to the finished download
@@ -1559,11 +2044,23 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                         # No sound here either, as the batch failed mid-way
                 else:
                     # --- Queue is empty: Reset UI and handle final sound --- 
+                    # <<< ADDED Batch Timing Calculation >>>
+                    batch_finished_now = False
+                    if current_batch_output_path is not None and _batch_start_time is not None:
+                        batch_end_time = datetime.datetime.now()
+                        total_batch_duration_obj = batch_end_time - _batch_start_time
+                        formatted_batch_time = beauty_format_seconds(total_batch_duration_obj.total_seconds())
+                        output_queue.put(f"\n--- Total Batch Time: {formatted_batch_time} ---\n")
+                        print(f"[Batch Timer] Batch download finished. Total Batch Time: {formatted_batch_time}")
+                        _batch_start_time = None # Reset for next potential batch
+                        batch_finished_now = True
+                    # <<< END Batch Timing Calculation >>>
+                    
                     set_ui_state_downloading(False) # Reset UI state now
-                    is_batch_finish = (current_batch_output_path is not None)
+                    is_batch_finish_for_sound = (current_batch_output_path is not None)
 
-                    if is_batch_finish:
-                         print("File download queue is empty. Batch finished.")
+                    if is_batch_finish_for_sound:
+                         print("File download queue is empty. Batch finished (for sound check).")
                          current_batch_output_path = None # Clear batch path *after* using the flag
 
                     # --- Play sound logic (only if batch just finished OR it was a single non-batch download) ---
@@ -1591,7 +2088,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                                 
                             if sound_played:
                                 status_text = "completion" if success else "failure/cancellation"
-                                finish_context = "Batch" if is_batch_finish else "Download"
+                                finish_context = "Batch" if batch_finished_now else "Download"
                                 print(f"[Sound] Played {finish_context} {status_text} sound ({current_platform}).")
                         except NameError: # Handle case where winsound wasn't imported (e.g., non-Windows)
                             print("[Sound] Sound playback skipped (winsound not available on this platform).")
@@ -1683,6 +2180,7 @@ def start_download_thread(search_result_data=None):
     # Access global variables defined within the main process block
     global download_process_active, current_settings, orpheus_instance, url_entry, path_var_main, stop_event
     global file_download_queue, current_batch_output_path # Access queue globals
+    global _batch_start_time # <<< ADDED
 
     if orpheus_instance is None:
         show_centered_messagebox("Error", "Orpheus library not initialized. Cannot start download.", dialog_type="error")
@@ -1742,27 +2240,40 @@ def start_download_thread(search_result_data=None):
             if not urls_in_file:
                 show_centered_messagebox("Info", f"File '{input_text}' is empty or contains no valid URLs.", dialog_type="warning")
                 current_batch_output_path = None # Reset path if file empty
+                _batch_start_time = None # <<< ADDED: Reset timer if file empty
                 return
 
             # Populate the global queue
             file_download_queue.extend(urls_in_file)
             print(f"Added {len(file_download_queue)} URLs to the download queue.")
 
+            # <<< SET BATCH START TIME HERE >>>
+            _batch_start_time = datetime.datetime.now()
+            print(f"[Batch Timer] Batch download started at: {_batch_start_time}")
+
             # Attempt to start the first download from the queue
             if file_download_queue:
                 first_url = file_download_queue.pop(0) # Get and remove the first URL
                 print(f"Attempting to start first download from file queue: {first_url}")
                 # Call helper, pass None for search_result_data from file
-                _start_single_download(first_url, current_batch_output_path, None)
+                # <<< MODIFIED: Check success and reset timer on failure >>>
+                success_starting_first = _start_single_download(first_url, current_batch_output_path, None)
+                if not success_starting_first:
+                    _batch_start_time = None # Reset if first item failed to start
+                    current_batch_output_path = None # Also clear this
+                    file_download_queue.clear()
+                    show_centered_messagebox("Batch Error", "Failed to start the first download of the batch.", dialog_type="error")
             else:
                  print("File queue was unexpectedly empty after population.")
                  current_batch_output_path = None # Reset path
+                 _batch_start_time = None # <<< ADDED: Reset timer if queue empty
 
         else:
             # --- Input is treated as a single URL ---
             # Clear queue and path if not processing a file batch
             file_download_queue.clear()
             current_batch_output_path = None
+            _batch_start_time = None # <<< ADDED: Ensure timer is None for single URL
             print(f"Treating input as single URL: {input_text}")
             # Call helper, passing original search_result_data if it exists
             _start_single_download(input_text, output_path_final, search_result_data)
@@ -1865,7 +2376,7 @@ def clear_search_ui():
 def display_results(results):
     # Access global variables defined within the main process block
     global search_results_data, tree, scrollbar, app, platform_var, type_var
-    print(f"Received {len(results)} search results to display.")
+    logging.debug(f"Received {len(results)} search results to display.")
     clear_treeview(); search_results_data = []
     item_number = 1
     # Local scope DownloadTypeEnum is fine here if ORPHEUS_AVAILABLE is false, otherwise use imported one
@@ -1941,7 +2452,7 @@ def display_results(results):
         except NameError: break
         except tkinter.TclError as e: print(f"TclError inserting into treeview (widget destroyed?): {e}"); break
         except Exception as e: print(f"Error inserting into treeview: {e}")
-    print(f"Displayed {item_number - 1} results.")
+    logging.debug(f"Displayed {item_number - 1} results.")
     try:
         # Ensure app exists before scheduling scrollbar check
         if 'app' in globals() and app and app.winfo_exists() and 'tree' in globals() and tree and tree.winfo_exists() and 'scrollbar' in globals() and scrollbar and scrollbar.winfo_exists():
@@ -1972,36 +2483,67 @@ def run_search_thread_target(orpheus, platform_name, search_type_str, query, gui
 
     results = []
     error_message = None
+    original_stdout = sys.stdout  # Save the original stdout
+    # Suppress stdout only for the critical search part
+    # Initialize search_results before the try block where it's assigned
+    search_results = []
     try:
+        sys.stdout = io.StringIO()    # Redirect stdout to a dummy StringIO object
         search_limit = gui_settings.get("globals", {}).get("general", {}).get("search_limit", 20)
         try: search_limit = int(search_limit)
-        except (ValueError, TypeError): print(f"Warning: Invalid search_limit '{search_limit}', defaulting to 20."); search_limit = 20
+        except (ValueError, TypeError): 
+            # Use original_stdout for this warning as sys.stdout is currently suppressed
+            original_stdout.write(f"Warning: Invalid search_limit '{search_limit}', defaulting to 20.\n")
+            search_limit = 20
         search_type_map = { "track": local_DownloadTypeEnum.track, "album": local_DownloadTypeEnum.album, "artist": local_DownloadTypeEnum.artist, "playlist": local_DownloadTypeEnum.playlist }
         query_type = search_type_map.get(search_type_str.lower())
         if not query_type: raise ValueError(f"Invalid search type: {search_type_str}")
         module_instance = orpheus.load_module(platform_name.lower())
         search_results = module_instance.search(query_type, query, limit=search_limit)
+    finally:
+        sys.stdout = original_stdout # ALWAYS restore stdout
+
+    # Continue processing with results, outside the stdout suppression block
+    try:
         formatted_results = []
-        for result in search_results:
-            formatted_result = { 'id': str(getattr(result, 'result_id', '')), 'title': str(getattr(result, 'name', 'N/A')), 'artist': ', '.join([str(a) for a in getattr(result, 'artists', [])]) if getattr(result, 'artists', []) else '-', 'duration': beauty_format_seconds(getattr(result, 'duration', None)) if getattr(result, 'duration', None) else '-', 'year': str(getattr(result, 'year', '-')), 'quality': ', '.join([str(q) for q in getattr(result, 'additional', [])]) if getattr(result, 'additional', []) else 'N/A', 'explicit': 'Y' if getattr(result, 'explicit', False) else '', 'raw_result': result }
-            formatted_results.append(formatted_result)
+        if search_results: # Check if search_results is not None and not empty
+            for result_object in search_results: # Renamed 'result' to 'result_object' for clarity
+                if result_object is None: # Add a check for None items
+                    # Log this occurrence if debug mode is on, or simply skip
+                    # Use original_stdout for this print as sys.stdout might be the StringIO buffer if error happened during module.search
+                    original_stdout.write(f"[Search Processing] INFO: Skipped a None item in search results from module {platform_name}.\\n")
+                    # Also attempt to log to GUI queue if available and in debug mode
+                    if 'output_queue' in globals() and output_queue and gui_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                        output_queue.put(f"WARNING: Skipped a None item in search results from module {platform_name}.\\n")
+                    continue
+
+                # Proceed with formatting if result_object is not None
+                formatted_result = {
+                    'id': str(getattr(result_object, 'result_id', '')),
+                    'title': str(getattr(result_object, 'name', 'N/A')),
+                    'artist': ', '.join([str(a) for a in getattr(result_object, 'artists', [])]) if getattr(result_object, 'artists', []) else '-',
+                    'duration': beauty_format_seconds(getattr(result_object, 'duration', None)) if getattr(result_object, 'duration', None) else '-',
+                    'year': str(getattr(result_object, 'year', '-')),
+                    'quality': ', '.join([str(q) for q in getattr(result_object, 'additional', [])]) if getattr(result_object, 'additional', []) else 'N/A',
+                    'explicit': 'Y' if getattr(result_object, 'explicit', False) else '',
+                    'raw_result': result_object
+                }
+                formatted_results.append(formatted_result)
         results = formatted_results
     except TypeError as e:
         # Handle the specific case where the module returns None instead of an iterable
         if "'NoneType' object is not iterable" in str(e):
             error_message = f"Search Error ({platform_name}): Module returned no iterable results. API issue or module bug?"
+            # This print will go to original_stdout if it happens after restoration, or be suppressed if before.
+            # Given the structure, it's after restoration, which is fine.
             print(f"[Search Error] Caught NoneType iterable error for {platform_name}. Module likely returned None.")
-            # Don't show a popup for this specific error, just log it
             if 'output_queue' in globals() and output_queue:
                 output_queue.put(f"INFO: {error_message}\n")
-            # Set results to empty list so the UI shows "No results"
-            results = []
+            results = [] # Set results to empty list so the UI shows "No results"
             error_message = None # Prevent the generic error popup
         else:
-            # Handle other TypeErrors normally
             error_message = f"Type Error during search: {str(e)}"
             print(f"[Search Error] {error_message}")
-            # Log the full traceback for unexpected TypeErrors
             import traceback
             tb_str = traceback.format_exc()
             print(tb_str)
@@ -2011,7 +2553,6 @@ def run_search_thread_target(orpheus, platform_name, search_type_str, query, gui
     except Exception as e:
          error_message = f"Error during search: {str(e)}"
          print(f"[Search Error] {error_message}")
-         # Log the full traceback for other exceptions
          import traceback
          tb_str = traceback.format_exc()
          print(tb_str)
@@ -2019,6 +2560,8 @@ def run_search_thread_target(orpheus, platform_name, search_type_str, query, gui
               output_queue.put(f"ERROR: {error_message}\n{tb_str}\n")
          results = [] # Ensure results is empty on error
     finally:
+        # This 'finally' is for the outer error handling of the whole function,
+        # not to be confused with the stdout restoration 'finally'.
         def _update_ui():
             # Access global 'search_process_active' defined in main process block
             global search_process_active
@@ -2069,7 +2612,7 @@ def start_search():
 
         # Pass the *global* orpheus_instance
         search_thread = threading.Thread(target=run_search_thread_target, args=(orpheus_instance, platform_name, search_type_str, query, current_settings), daemon=True)
-        print("Starting search thread...")
+        logging.debug("Starting search thread...")
         search_thread.start()
     except NameError as e:
         print(f"Error starting search (widgets not ready?): {e}")
@@ -2164,8 +2707,8 @@ def build_url_from_result(result_data):
         except json.JSONDecodeError as e: print(f"[SC URL] API JSON Error: {e}"); return None
         except Exception as e: print(f"[SC URL] API Unexpected Error: {e}"); return None
     else:
-        base_urls = { "qobuz": "https://open.qobuz.com", "tidal": "https://listen.tidal.com", "deezer": "https://www.deezer.com", "beatport": "https://www.beatport.com", "beatsource": "https://www.beatsource.com", "napster": "https://web.napster.com", "idagio": "https://app.idagio.com" } # <<< Added beatsource base url
-        type_paths = { "qobuz": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "tidal": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "deezer": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "beatport": {"track": "track", "album": "release", "artist": "artist"}, "beatsource": {"track": "track", "album": "release", "artist": "artist", "playlist": "playlist"}, "napster": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "idagio": {"track": "recording", "album": "album", "artist": "artist"} } # <<< Added beatsource type paths
+        base_urls = { "qobuz": "https://open.qobuz.com", "tidal": "https://listen.tidal.com", "deezer": "https://www.deezer.com", "beatport": "https://www.beatport.com", "beatsource": "https://www.beatsource.com", "napster": "https://web.napster.com", "idagio": "https://app.idagio.com", "spotify": "https://open.spotify.com" } # <<< Added spotify base url
+        type_paths = { "qobuz": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "tidal": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "deezer": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "beatport": {"track": "track", "album": "release", "artist": "artist"}, "beatsource": {"track": "track", "album": "release", "artist": "artist", "playlist": "playlist"}, "napster": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}, "idagio": {"track": "recording", "album": "album", "artist": "artist"}, "spotify": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"} } # <<< Added spotify type paths
         if p_lower in base_urls and p_lower in type_paths and t_lower in type_paths[p_lower]:
             url_path_segment = type_paths[p_lower][t_lower]; url = f"{base_urls[p_lower]}/{url_path_segment}/{item_id}"
             print(f"[URL Build - {platform}] Constructed: {url}"); return url
@@ -2293,51 +2836,130 @@ def _update_settings_tab_widgets():
 
 # <<< NEW FUNCTION: Create content for a specific credential tab >>>
 def _create_credential_tab_content(platform_name, tab_frame):
-    """Creates the labels and entry fields for a given platform's credentials."""
+    """Creates the labels and entry fields for a given platform's settings (credentials and general config)."""
     # Access global variables defined within the main process block
     global settings_vars, current_settings, DEFAULT_SETTINGS
-    print(f"Creating content for credential tab: {platform_name}")
+    logging.debug(f"Creating content for settings tab: {platform_name}")
     try:
-        # Ensure necessary global structures exist
-        if 'settings_vars' not in globals() or 'credentials' not in settings_vars: settings_vars['credentials'] = {}
+        # platform_name is the module key (e.g., 'Tidal', 'Spotify').
+        # Settings for these modules are stored under the 'credentials' key in DEFAULT_SETTINGS and current_settings.
+
+        if 'settings_vars' not in globals(): settings_vars = {}
+        # Use 'credentials' as the key for module-specific settings in settings_vars as well, matching DEFAULT_SETTINGS structure
+        if 'credentials' not in settings_vars: settings_vars['credentials'] = {}
         if platform_name not in settings_vars['credentials']: settings_vars['credentials'][platform_name] = {}
 
-        # Get default fields and current values
-        default_platform_fields = DEFAULT_SETTINGS.get("credentials", {}).get(platform_name, {})
-        current_platform_creds = current_settings.get("credentials", {}).get(platform_name, {})
+        # Fetch settings from the 'credentials' section of DEFAULT_SETTINGS and current_settings
+        default_platform_specific_settings = DEFAULT_SETTINGS.get("credentials", {}).get(platform_name, {})
+        current_platform_specific_settings = current_settings.get("credentials", {}).get(platform_name, {})
 
-        tab_frame.grid_columnconfigure(1, weight=1) # Configure column weight for the frame
+        if not default_platform_specific_settings:
+            logging.warning(f"No default settings found for module '{platform_name}' under DEFAULT_SETTINGS[\'credentials\']. UI will be empty.")
+            customtkinter.CTkLabel(tab_frame, text=f"No configurable settings found for {platform_name}.").grid(row=0, column=0, sticky="w", padx=10, pady=10)
+            return
+
+        tab_frame.grid_columnconfigure(1, weight=1)
         row = 0
-        for field_key, default_value in default_platform_fields.items():
-            # Get current value, falling back to default
-            current_value = current_platform_creds.get(field_key, default_value)
+        for field_key, default_value in default_platform_specific_settings.items():
+            current_value = current_platform_specific_settings.get(field_key, default_value)
+            is_boolean_setting = isinstance(default_value, bool)
 
-            # Create/store Tkinter variable if it doesn't exist for this field yet
-            if field_key not in settings_vars['credentials'][platform_name]:
-                var = tkinter.StringVar(value=str(current_value))
-                settings_vars['credentials'][platform_name][field_key] = var
-            else:
-                # Variable already exists (e.g., from a previous load attempt?), just get it
-                var = settings_vars['credentials'][platform_name][field_key]
-                # Ensure its value reflects the latest current_settings
-                var.set(str(current_value))
+            actual_bool_value_for_var = False
+            if is_boolean_setting:
+                if isinstance(current_value, str):
+                    actual_bool_value_for_var = current_value.lower() == 'true'
+                elif isinstance(current_value, (bool, int)):
+                    actual_bool_value_for_var = bool(current_value)
+                else:
+                    actual_bool_value_for_var = bool(default_value)
+            
+            # Use 'credentials' path for settings_vars
+            var = settings_vars['credentials'][platform_name].get(field_key)
+
+            if var is not None:
+                if is_boolean_setting and not isinstance(var, tkinter.BooleanVar):
+                    logging.warning(f"Mismatched var type for {platform_name}.{field_key}. Expected BooleanVar, got {type(var)}. Recreating.")
+                    var = None
+                elif not is_boolean_setting and not isinstance(var, tkinter.StringVar):
+                    logging.warning(f"Mismatched var type for {platform_name}.{field_key}. Expected StringVar, got {type(var)}. Recreating.")
+                    var = None
+            
+            if var is None:
+                if is_boolean_setting:
+                    var = tkinter.BooleanVar(value=actual_bool_value_for_var)
+                else:
+                    var = tkinter.StringVar(value=str(current_value)) # For non-booleans, use current_value as string
+                settings_vars['credentials'][platform_name][field_key] = var # CORRECTED KEY HERE
+            else: # Update existing variable's value
+                if is_boolean_setting:
+                    var.set(actual_bool_value_for_var)
+                else:
+                    var.set(str(current_value))
 
             # Create label
-            current_pady = (13 if row == 0 else 2, 2)
-            customtkinter.CTkLabel(tab_frame, text=f"{field_key.replace('_', ' ').title()}:").grid(row=row, column=0, sticky="w", padx=(2, 10), pady=current_pady)
+            label_text = field_key.replace('_', ' ').title()
+            customtkinter.CTkLabel(tab_frame, text=label_text).grid(row=row, column=0, sticky="w", padx=(10, 10), pady=(5,5))
 
-            # Create entry
-            entry = customtkinter.CTkEntry(tab_frame, textvariable=var)
-            entry.grid(row=row, column=1, sticky="ew", padx=10, pady=current_pady)
-            entry.bind("<Button-3>", show_context_menu)
-            entry.bind("<Button-2>", show_context_menu)
-            entry.bind("<Control-Button-1>", show_context_menu)
-            entry.bind("<FocusIn>", lambda e, w=entry: handle_focus_in(w))
-            entry.bind("<FocusOut>", lambda e, w=entry: handle_focus_out(w))
+            # Create widget based on type
+            if is_boolean_setting:
+                widget = customtkinter.CTkCheckBox(tab_frame, text="", variable=var) # No separate text for checkbox, label serves that.
+                widget.grid(row=row, column=1, sticky="w", padx=10, pady=(5,5))
+            else:
+                widget = customtkinter.CTkEntry(tab_frame, textvariable=var)
+                widget.grid(row=row, column=1, sticky="ew", padx=10, pady=(5,5))
+                # Apply existing bindings for CTkEntry
+                widget.bind("<Button-3>", show_context_menu)
+                widget.bind("<Button-2>", show_context_menu)
+                widget.bind("<Control-Button-1>", show_context_menu)
+                widget.bind("<FocusIn>", lambda e, w=widget: handle_focus_in(w))
+                widget.bind("<FocusOut>", lambda e, w=widget: handle_focus_out(w))
+            
+            # Add tooltip (existing logic)
+            field_description = DEFAULT_SETTINGS.get("_descriptions", {}).get(platform_name, {}).get(field_key)
+            if field_description:
+                tooltip_target = widget
+                try:
+                    if tooltip_target.winfo_exists():
+                        if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+                            print(f"Attaching tooltip to {tooltip_target} for {platform_name}.{field_key}: '{field_description[:30]}...'")
+                        CTkToolTip(tooltip_target, message=field_description, delay=0.3, wraplength=300)
+                    else:
+                        logging.warning(f"Cannot attach tooltip, widget for {platform_name}.{field_key} does not exist or not yet drawn.")
+                except Exception as e_tooltip:
+                    logging.error(f"Error creating tooltip for {platform_name}.{field_key}: {e_tooltip}")
             row += 1
-        print(f"Finished creating content for {platform_name}")
+
+        # Special handling for Spotify client_id/secret link (existing logic)
+        if platform_name == "Spotify":
+            # Check if client_id or client_secret are part of this module's settings
+            if any(field in default_platform_specific_settings for field in ["client_id", "client_secret"]):
+                import webbrowser
+                info_label = customtkinter.CTkLabel(
+                    tab_frame,
+                    text="To obtain client ID and Secret, create a new app here:",
+                    text_color="#898c8d",
+                    wraplength=350,
+                    justify="center",
+                    anchor="center"
+                )
+                info_label.grid(row=row, column=0, columnspan=2, sticky="ew", padx=2, pady=(10, 2))
+                row += 1
+                def open_spotify_dashboard():
+                    webbrowser.open("https://developer.spotify.com/dashboard")
+                open_link_button = customtkinter.CTkButton(
+                    tab_frame,
+                    text="Spotify Developer Dashboard",
+                    command=open_spotify_dashboard,
+                    width=200,
+                    fg_color="#343638",
+                    hover_color="#1F6AA5"
+                )
+                open_link_button.grid(row=row, column=0, columnspan=2, sticky="", padx=2, pady=(0, 10))
+                row += 1
+
+        logging.debug(f"Finished creating content for {platform_name}")
     except Exception as e:
-        print(f"Error creating content for credential tab {platform_name}: {e}")
+        print(f"Error creating content for settings tab {platform_name}: {e}")
         import traceback
         traceback.print_exc()
 
@@ -2348,11 +2970,11 @@ def _handle_settings_tab_change():
     global settings_tabview, credential_tab_frames, _created_credential_tabs
     try:
         selected_tab_name = settings_tabview.get() # Get the name of the currently selected tab
-        print(f"[Settings Tab Change] Selected: {selected_tab_name}")
+        logging.debug(f"[Settings Tab Change] Selected: {selected_tab_name}")
 
         # Check if it's a credential tab that hasn't been created yet
         if selected_tab_name != "Global" and selected_tab_name not in _created_credential_tabs:
-            print(f"  -> Tab '{selected_tab_name}' needs content creation.")
+            logging.debug(f"  -> Tab '{selected_tab_name}' needs content creation.")
             # <<< The selected_tab_name IS the platform_key now >>>
             internal_platform_name = selected_tab_name
 
@@ -2364,9 +2986,9 @@ def _handle_settings_tab_change():
                 _create_credential_tab_content(internal_platform_name, tab_frame)
                 # Mark this tab as created
                 _created_credential_tabs.add(selected_tab_name)
-                print(f"  -> Content created and tab '{selected_tab_name}' marked as loaded.")
+                logging.debug(f"  -> Content created and tab '{selected_tab_name}' marked as loaded.")
             else:
-                print(f"[ERROR] Could not find frame for credential tab: {selected_tab_name}")
+                logging.error(f"[ERROR] Could not find frame for credential tab: {selected_tab_name}")
         # else: # Optional: Log if tab is Global or already created
             # print(f"  -> Tab '{selected_tab_name}' is Global or already loaded.")
 
@@ -2378,6 +3000,271 @@ def _handle_settings_tab_change():
 # =============================================================================
 # --- 10. MAIN EXECUTION ---
 # =============================================================================
+
+# <<< NEW FUNCTION: Spotify Web API Auth Dialog >>>
+def _execute_spotify_dialog_on_main_thread(auth_url, parent_window_for_dialog, result_queue):
+    # This function runs on the main GUI thread
+    global app # Ensure access to global app
+    pasted_url_container = {"url": None}
+
+    effective_parent = parent_window_for_dialog if parent_window_for_dialog else app
+    if not effective_parent:
+        logging.error("Spotify auth dialog (main_thread): Cannot show dialog, no effective parent window (app is None).")
+        result_queue.put(None) # Unblock the waiting thread
+        return
+
+    try:
+        dialog = customtkinter.CTkToplevel(effective_parent)
+        dialog.title("Spotify Authorization")
+        dialog.geometry("550x275")
+        dialog.resizable(False, False)
+
+        effective_parent.update_idletasks()
+        parent_x = effective_parent.winfo_x()
+        parent_y = effective_parent.winfo_y()
+        parent_width = effective_parent.winfo_width()
+        parent_height = effective_parent.winfo_height()
+        dialog_width = 550
+        dialog_height = 275
+        x = parent_x + (parent_width // 2) - (dialog_width // 2)
+        y = parent_y + (parent_height // 2) - (dialog_height // 2)
+        dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+
+        main_frame = customtkinter.CTkFrame(dialog, fg_color="transparent")
+        main_frame.pack(padx=20, pady=20, expand=True, fill="both")
+
+        instruction_text = (
+            "1. Click the button below, your browser will open the URL.\n"
+            "2. After loading completes, copy the URL it returns & paste below. Click Submit.\n"
+            "3. A new URL for Stream API should open up. Click Continue to app."
+        )
+        info_label = customtkinter.CTkLabel(main_frame, text=instruction_text, wraplength=500, justify="left")
+        info_label.pack(pady=(0,10), anchor="w")
+
+        # Removed auth_url_label
+
+        def open_auth_url_in_browser():
+            webbrowser.open(auth_url)
+
+        open_browser_button = customtkinter.CTkButton(main_frame, text="Open Web API URL", command=open_auth_url_in_browser, width=100) # Changed width to 100
+        open_browser_button.pack(pady=(10,10)) # Adjusted pady due to removed label
+
+        redirect_url_label = customtkinter.CTkLabel(main_frame, text="Paste callback URL here:", anchor="w") # Renamed label
+        redirect_url_label.pack(pady=(5,0), anchor="w")
+        redirect_url_entry = customtkinter.CTkEntry(main_frame, width=500)
+        redirect_url_entry.pack(pady=(0,15), fill="x", expand=False) # Added expand=False
+        redirect_url_entry.focus_set()
+
+        # Add focus behavior
+        redirect_url_entry.bind("<FocusIn>", lambda e, w=redirect_url_entry: handle_focus_in(w))
+        redirect_url_entry.bind("<FocusOut>", lambda e, w=redirect_url_entry: handle_focus_out(w))
+
+        # REMOVE existing bindings from redirect_url_entry for <Button-3>
+        # redirect_url_entry.unbind("<Button-3>") # Unbind if necessary, or just don't add it again.
+
+        # Keep macOS specific bindings on the entry for now, or we can try moving them too.
+        # For now, let's focus on <Button-3>
+        redirect_url_entry.bind("<Button-2>", lambda e, pd=dialog, entry=redirect_url_entry: _show_spotify_dialog_context_menu(e, pd, entry))
+        redirect_url_entry.bind("<Control-Button-1>", lambda e, pd=dialog, entry=redirect_url_entry: _show_spotify_dialog_context_menu(e, pd, entry))
+
+        # New handler for right-clicks on the dialog
+        def _handle_spotify_dialog_right_click(event, parent_dialog_obj, target_entry_obj):
+            """Handles right-click events on the Spotify dialog's entry widget."""
+            # Get the coordinates of the target entry widget
+            entry_x = target_entry_obj.winfo_rootx()
+            entry_y = target_entry_obj.winfo_rooty()
+            entry_width = target_entry_obj.winfo_width()
+            entry_height = target_entry_obj.winfo_height()
+            
+            # Check if the click is inside the entry widget
+            if (entry_x <= event.x_root <= entry_x + entry_width and 
+                entry_y <= event.y_root <= entry_y + entry_height):
+                _show_spotify_dialog_context_menu(event, parent_dialog_obj, target_entry_obj)
+
+        # Bind <Button-3> to the dialog itself
+        dialog.bind("<Button-3>", lambda e, pd=dialog, entry=redirect_url_entry: _handle_spotify_dialog_right_click(e, pd, entry))
+        # print("Spotify Dialog Context Menu: Bound <Button-3> to the dialog itself.") # Commented out to reduce log clutter
+
+        button_frame = customtkinter.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.pack(side="bottom", fill="x", pady=(10,0), anchor="s") # Changed side, pady, and added anchor
+
+        def on_submit_dialog():
+            pasted_url = redirect_url_entry.get().strip()
+            pasted_url_container["url"] = pasted_url if pasted_url else None
+            dialog.destroy()
+
+        def on_cancel_dialog():
+            pasted_url_container["url"] = None
+            dialog.destroy()
+
+        submit_button = customtkinter.CTkButton(button_frame, text="Submit", command=on_submit_dialog, width=100) # Changed width
+        submit_button.pack(side="right", padx=(10,0))
+
+        cancel_button = customtkinter.CTkButton(button_frame, text="Cancel", command=on_cancel_dialog, width=100, fg_color="#343638", hover_color="#1F6AA5")
+        cancel_button.pack(side="right")
+
+        dialog.protocol("WM_DELETE_WINDOW", on_cancel_dialog)
+        dialog.transient(effective_parent)
+        dialog.grab_set()
+        
+        logging.info("Spotify auth dialog (main_thread): Waiting for dialog window.")
+        effective_parent.wait_window(dialog) # This is now safe as it's on the main thread
+        logging.info(f"Spotify auth dialog (main_thread): Dialog closed. Pasted URL: {'...' if pasted_url_container['url'] else 'None'}")
+        
+        result_queue.put(pasted_url_container["url"])
+
+    except Exception as e:
+        logging.error(f"Spotify auth dialog (main_thread): Error creating/showing dialog: {e}", exc_info=True)
+        result_queue.put(None) # Ensure queue is unblocked on error
+
+def show_spotify_web_api_auth_dialog(auth_url, parent_window):
+    # This function is called from the worker thread
+    global app # Ensure access to global app
+    
+    if not app or not app.winfo_exists():
+        logging.error("Spotify auth dialog (proxy): Main application window not available.")
+        return None
+
+    result_queue = queue.Queue()
+    
+    # Schedule the actual dialog creation and interaction on the main GUI thread
+    logging.info("Spotify auth dialog (proxy): Scheduling dialog on main thread.")
+    app.after(0, _execute_spotify_dialog_on_main_thread, auth_url, parent_window, result_queue)
+    
+    # Wait for the result from the main GUI thread
+    try:
+        logging.info("Spotify auth dialog (proxy): Waiting for result from main thread.")
+        # Add a timeout to prevent indefinite blocking if something goes wrong in the main thread
+        pasted_url = result_queue.get(timeout=120) # Wait for 2 minutes
+        logging.info(f"Spotify auth dialog (proxy): Received result: {'...' if pasted_url else 'None'}")
+        return pasted_url
+    except queue.Empty:
+        logging.error("Spotify auth dialog (proxy): Timed out waiting for result from main thread.")
+        return None
+    except Exception as e:
+        logging.error(f"Spotify auth dialog (proxy): Error getting result from queue: {e}", exc_info=True)
+        return None
+# <<< END NEW FUNCTION >>>
+
+# --- In-memory Settings & Global Orpheus Instance ---
+# ... existing code ...
+        redirect_url_entry.pack(pady=(0,15), fill="x", expand=False) # Added expand=False
+        redirect_url_entry.focus_set()
+
+        # REMOVE existing bindings from redirect_url_entry for <Button-3>
+        # redirect_url_entry.unbind("<Button-3>") # Unbind if necessary, or just don't add it again.
+
+        # Keep macOS specific bindings on the entry for now, or we can try moving them too.
+        # For now, let's focus on <Button-3>
+        redirect_url_entry.bind("<Button-2>", lambda e, pd=dialog, entry=redirect_url_entry: _show_spotify_dialog_context_menu(e, pd, entry))
+        redirect_url_entry.bind("<Control-Button-1>", lambda e, pd=dialog, entry=redirect_url_entry: _show_spotify_dialog_context_menu(e, pd, entry))
+
+        button_frame = customtkinter.CTkFrame(main_frame, fg_color="transparent")
+        button_frame.pack(side="bottom", fill="x", pady=(10,0), anchor="s") # Changed side, pady, and added anchor
+
+        def on_submit_dialog():
+            pasted_url = redirect_url_entry.get().strip()
+            pasted_url_container["url"] = pasted_url if pasted_url else None
+            dialog.destroy()
+
+        def on_cancel_dialog():
+            pasted_url_container["url"] = None
+            dialog.destroy()
+
+        submit_button = customtkinter.CTkButton(button_frame, text="Submit", command=on_submit_dialog, width=100) # Changed width
+        submit_button.pack(side="right", padx=(10,0))
+
+        cancel_button = customtkinter.CTkButton(button_frame, text="Cancel", command=on_cancel_dialog, width=100, fg_color="#343638", hover_color="#1F6AA5")
+        cancel_button.pack(side="right")
+
+        dialog.protocol("WM_DELETE_WINDOW", on_cancel_dialog)
+        dialog.transient(effective_parent)
+        dialog.grab_set()
+        
+        logging.info("Spotify auth dialog (main_thread): Waiting for dialog window.")
+        effective_parent.wait_window(dialog) # This is now safe as it's on the main thread
+        logging.info(f"Spotify auth dialog (main_thread): Dialog closed. Pasted URL: {'...' if pasted_url_container['url'] else 'None'}")
+        
+        result_queue.put(pasted_url_container["url"])
+
+    except Exception as e:
+        logging.error(f"Spotify auth dialog (main_thread): Error creating/showing dialog: {e}", exc_info=True)
+        result_queue.put(None) # Ensure queue is unblocked on error
+
+# <<< NEW FUNCTION to handle main tab changes >>>
+def _handle_main_tab_change():
+    """Callback function when a tab in the main tabview is selected."""
+    global tabview # Access the main tabview
+    try:
+        selected_tab_name = tabview.get() # Get the name of the currently selected tab
+        logging.debug(f"[Main Tab Change] Selected: {selected_tab_name}")
+
+        if selected_tab_name == "Search":
+            logging.debug("  -> Search tab selected, refreshing platform dropdown.")
+            _update_search_platform_dropdown() # Call the new function
+        # Add other tab-specific actions here if needed in the future
+
+    except Exception as e:
+        print(f"Error handling main tab change for '{selected_tab_name if 'selected_tab_name' in locals() else 'Unknown Tab'}': {e}")
+        import traceback
+        traceback.print_exc()
+
+# <<< NEW FUNCTION to update the search platform dropdown >>>
+def _update_search_platform_dropdown():
+    """Updates the platform dropdown in the Search tab based on current settings."""
+    global platform_var, platform_combo, current_settings, DEFAULT_SETTINGS
+    logging.debug("Updating search platform dropdown...")
+    try:
+        if not all(var in globals() for var in ['platform_var', 'platform_combo', 'current_settings', 'DEFAULT_SETTINGS']):
+            logging.error("Search platform update: Missing required global variables.")
+            return
+        
+        if not platform_combo.winfo_exists(): # Check if widget is still valid
+            logging.warning("Search platform update: platform_combo widget no longer exists.")
+            return
+
+        configured_platforms = []
+        if ('DEFAULT_SETTINGS' in globals() and 'credentials' in DEFAULT_SETTINGS and 
+            'current_settings' in globals() and 'credentials' in current_settings):
+            
+            for platform_name, default_creds_fields in DEFAULT_SETTINGS["credentials"].items():
+                if platform_name == "Musixmatch":
+                    continue
+                current_platform_creds = current_settings["credentials"].get(platform_name)
+                if not current_platform_creds:
+                    continue
+                all_required_fields_filled = True
+                for field_key, default_field_value in default_creds_fields.items():
+                    if isinstance(default_field_value, str):
+                        current_field_value = current_platform_creds.get(field_key)
+                        if current_field_value is None or (isinstance(current_field_value, str) and not current_field_value.strip()):
+                            all_required_fields_filled = False
+                            break
+                if all_required_fields_filled:
+                    configured_platforms.append(platform_name)
+            platforms = sorted(configured_platforms)
+        else:
+            all_module_keys = current_settings.get("credentials", {}).keys()
+            platforms = sorted([name for name in all_module_keys if name != "Musixmatch"])
+
+        current_selection = platform_var.get()
+        platform_combo.configure(values=platforms)
+
+        if current_selection in platforms:
+            platform_var.set(current_selection)
+        elif platforms:
+            platform_var.set(platforms[0])
+            on_platform_change() # Trigger update for types if selection changed
+        else:
+            platform_var.set("")
+            on_platform_change() # Trigger update for types (will show empty)
+        
+        logging.debug(f"Search platform dropdown updated with: {platforms}")
+
+    except Exception as e:
+        print(f"Error updating search platform dropdown: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     multiprocessing.freeze_support() # Essential for PyInstaller bundling
@@ -2474,12 +3361,7 @@ if __name__ == "__main__":
         # --- Default Settings Structure ---
         DEFAULT_SETTINGS = {
             "globals": {
-                "general": {
-                    "output_path": os.path.join(_SCRIPT_DIR, "Downloads"),
-                    "quality": "hifi",
-                    "search_limit": 20,
-                    "play_sound_on_finish": True # <<< Moved here
-                },
+                "general": { "output_path": os.path.join(_SCRIPT_DIR, "Downloads"), "quality": "hifi", "search_limit": 20, "play_sound_on_finish": True },
                 "artist_downloading": { "return_credited_albums": True, "separate_tracks_skip_downloaded": True },
                 "formatting": { "album_format": "{name}{explicit}", "playlist_format": "{name}{explicit}", "track_filename_format": "{track_number}. {name}", "single_full_path_format": "{name}", "enable_zfill": True, "force_album_format": False },
                 "codecs": { "proprietary_codecs": False, "spatial_codecs": True },
@@ -2487,72 +3369,23 @@ if __name__ == "__main__":
                 "lyrics": { "embed_lyrics": True, "embed_synced_lyrics": False, "save_synced_lyrics": True },
                 "covers": { "embed_cover": True, "main_compression": "high", "main_resolution": 1400, "save_external": False, "external_format": "png", "external_compression": "low", "external_resolution": 3000, "save_animated_cover": True },
                 "playlist": { "save_m3u": True, "paths_m3u": "absolute", "extended_m3u": True },
-                "advanced": {
-                    "advanced_login_system": False,
-                    "codec_conversions": { "alac": "flac", "wav": "flac" },
-                    "conversion_flags": { "flac": { "compression_level": "5" } },
-                    "conversion_keep_original": False,
-                    "cover_variance_threshold": 8,
-                    "debug_mode": False,
-                    "disable_subscription_checks": False,
-                    "enable_undesirable_conversions": False,
-                    "ignore_existing_files": False,
-                    "ignore_different_artists": True
-                }
+                "advanced": { "advanced_login_system": False, "codec_conversions": { "alac": "flac", "wav": "flac" }, "conversion_flags": { "flac": { "compression_level": "5" } }, "conversion_keep_original": False, "cover_variance_threshold": 8, "debug_mode": False, "disable_subscription_checks": False, "enable_undesirable_conversions": False, "ignore_existing_files": False, "ignore_different_artists": True }
             },
-            "credentials": {
-                # <<< ADDED AppleMusic ENTRY >>>
-                "AppleMusic": {
-                    "get_original_cover": True,
-                    "print_original_cover_url": False,
-                    "lyrics_type": "standard",
-                    "lyrics_custom_ms_sync": False,
-                    "lyrics_language_override": "",
-                    "lyrics_syllable_sync": False,
-                    "email": "",
-                    "password": "",
-                    "force_region": "",
-                    "selected_language": "en"
-                },
-                "Tidal": { "tv_atmos_token": "", "tv_atmos_secret": "", "mobile_atmos_hires_token": "", "mobile_hires_token": "", "enable_mobile": True, "prefer_ac4": False, "fix_mqa": True },
+            "credentials": {                
+                "AppleMusic": { "get_original_cover": True, "print_original_cover_url": False, "lyrics_type": "standard", "lyrics_custom_ms_sync": False, "lyrics_language_override": "", "lyrics_syllable_sync": False, "email": "", "password": "", "force_region": "", "selected_language": "en" },
+                "Spotify": { "username": "", "redirect_uri": "http://127.0.0.1:8888/callback", "client_id": "", "client_secret": "", "download_pause_seconds": 30 },
+                "Tidal": { "tv_atmos_token": "", "tv_atmos_secret": "", "mobile_atmos_hires_token": "", "mobile_hires_token": "", "enable_mobile": False, "prefer_ac4": False, "fix_mqa": True },
                 "Qobuz": { "app_id": "", "app_secret": "", "quality_format": "{sample_rate}kHz {bit_depth}bit", "username": "", "password": "" },
                 "Deezer": { "client_id": "", "client_secret": "", "bf_secret": "", "email": "", "password": "" },
                 "SoundCloud": { "web_access_token": "" },
-                "Napster": {
-                    "api_key": "",
-                    "customer_secret": "",
-                    "requested_netloc": "",
-                    "username": "",
-                    "password": ""
-                },
-                # <<< ADDED Beatsource ENTRY >>>
+                "Napster": { "api_key": "", "customer_secret": "", "requested_netloc": "", "username": "", "password": "" },
                 "Beatsource": { "username": "", "password": "" },
                 "Beatport": { "username": "", "password": "" },
-                "BugsMusic": {
-                    "username": "",
-                    "password": ""
-                },
-                "Idagio": {
-                    "username": "",
-                    "password": ""
-                },
-                "KKBOX": {
-                    "kc1_key": "",
-                    "secret_key": "",
-                    "email": "",
-                    "password": ""
-                },
-                "Nugs": {
-                    "username": "",
-                    "password": "",
-                    "client_id": "", # Default empty, user provided example values
-                    "dev_key": ""      # Default empty, user provided example values
-                },
-                "Musixmatch": {
-                    "token_limit": 10,
-                    "lyrics_format": "standard",
-                    "custom_time_decimals": False
-                }
+                "BugsMusic": { "username": "", "password": "" },
+                "Idagio": { "username": "", "password": "" },
+                "KKBOX": { "kc1_key": "", "secret_key": "", "email": "", "password": "" },
+                "Nugs": { "username": "", "password": "", "client_id": "", "dev_key": "" },
+                "Musixmatch": { "token_limit": 10, "lyrics_format": "standard", "custom_time_decimals": False }
             }
         }
 
@@ -2585,22 +3418,25 @@ if __name__ == "__main__":
         # =====================================================================
         # --- INITIALIZATION (Main Process Only) ---
         # =====================================================================
+        initial_settings_were_defaulted = False # Flag to check if settings were created from scratch
         try:
-            load_settings()
-            # <<< Debug Print 1 - Wrap in condition >>>
-            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-                print(f"[DEBUG] After load_settings: output_path = {current_settings.get('globals', {}).get('general', {}).get('output_path')}")
-            initialize_orpheus() # <<< Attempt to initialize the global instance
-        except FileNotFoundError as e:
-             print(f"Initialization failed: {e}")
-             # Optionally show a message box and exit if settings are critical
-             # show_centered_messagebox("Fatal Error", str(e), dialog_type="error")
-             sys.exit(1) # Exit if settings file is missing
-        except Exception as e:
-             print(f"Unexpected error during initialization: {e}")
+            # load_settings now returns True if it had to create defaults because file was missing/bad
+            initial_settings_were_defaulted = load_settings() 
+            
+            if initial_settings_were_defaulted:
+                print("[Main Init] load_settings reported that default settings were used (file missing/corrupt).")
+                # The actual save will happen after GUI setup to ensure all components are ready if save_settings uses them.
+            
+            initialize_orpheus() # Initialize Orpheus with current_settings
+        
+        # Removed FileNotFoundError handler here as load_settings handles it by creating defaults
+        except Exception as e: 
+             print(f"Unexpected error during initialization: {type(e).__name__}: {e}")
+             import traceback
+             traceback.print_exc()
              # Decide if the app can continue partially or should exit
-             # show_centered_messagebox("Fatal Error", f"Initialization failed: {e}", dialog_type="error")
-             # sys.exit(1)
+             show_centered_messagebox("Fatal Initialization Error", f"A critical error occurred during startup: {e}. The application might not work correctly. Please check logs.", dialog_type="error")
+             # sys.exit(1) # Optionally exit
 
         # =====================================================================
         # --- GUI SETUP (Main Process Only) ---
@@ -2609,7 +3445,7 @@ if __name__ == "__main__":
         if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
             print(f"[DEBUG] Before GUI setup: output_path = {current_settings.get('globals', {}).get('general', {}).get('output_path')}")
         app = customtkinter.CTk()
-        app.title(f"OrpheusDL GUI {__version__}")
+        app.title("OrpheusDL GUI") # MODIFIED_LINE: Removed version from title
         app.geometry("940x600")
 
         # Icon - Updated to check OS and look in root folder
@@ -2649,7 +3485,7 @@ if __name__ == "__main__":
         app.geometry(f"{window_width}x{window_height}+{x_pos}+{y_pos}") # Apply intended size and calculated position
 
         # --- Main TabView ---
-        tabview = customtkinter.CTkTabview(master=app); tabview.pack(padx=10, pady=10, expand=True, fill="both")
+        tabview = customtkinter.CTkTabview(master=app, command=_handle_main_tab_change); tabview.pack(padx=10, pady=10, expand=True, fill="both")
 
         # --- Download Tab ---
         download_tab = tabview.add("Download"); download_tab.grid_columnconfigure(1, weight=1); download_tab.grid_rowconfigure(2, weight=1)
@@ -2691,7 +3527,41 @@ if __name__ == "__main__":
         controls_frame = customtkinter.CTkFrame(search_main_frame, fg_color="transparent"); controls_frame.pack(fill="x", pady=(5, 10)); controls_frame.grid_columnconfigure(4, weight=1)
         customtkinter.CTkLabel(controls_frame, text="Platform").grid(row=0, column=0, padx=(5,1), sticky="w")
         # Use current_settings which was loaded within this block
-        all_module_keys = current_settings.get("credentials", {}).keys(); platforms = sorted([name for name in all_module_keys if name != "Musixmatch"])
+        
+        # --- MODIFIED PLATFORM LIST GENERATION ---
+        configured_platforms = []
+        # Ensure DEFAULT_SETTINGS and current_settings are accessible and structured as expected
+        if ('DEFAULT_SETTINGS' in globals() and 'credentials' in DEFAULT_SETTINGS and 
+            'current_settings' in globals() and 'credentials' in current_settings):
+            
+            for platform_name, default_creds_fields in DEFAULT_SETTINGS["credentials"].items():
+                if platform_name == "Musixmatch":  # Always exclude Musixmatch
+                    continue
+
+                current_platform_creds = current_settings["credentials"].get(platform_name)
+                if not current_platform_creds: # Platform might not be in current_settings if it wasn't in user's file
+                    continue
+
+                all_required_fields_filled = True
+                for field_key, default_field_value in default_creds_fields.items():
+                    # Only check string fields that are expected to be filled by the user
+                    if isinstance(default_field_value, str): # Check if the default type is string
+                        current_field_value = current_platform_creds.get(field_key)
+                        # If the field is missing in current_settings or is an empty string after stripping
+                        if current_field_value is None or (isinstance(current_field_value, str) and not current_field_value.strip()):
+                            all_required_fields_filled = False
+                            break 
+                
+                if all_required_fields_filled:
+                    configured_platforms.append(platform_name)
+            
+            platforms = sorted(configured_platforms)
+        else:
+            # Fallback to existing logic if settings structures are not as expected (should be rare)
+            all_module_keys = current_settings.get("credentials", {}).keys()
+            platforms = sorted([name for name in all_module_keys if name != "Musixmatch"])
+        # --- END MODIFIED PLATFORM LIST GENERATION ---
+
         platform_var = tkinter.StringVar(value=platforms[0] if platforms else ""); platform_combo = customtkinter.CTkComboBox(controls_frame, values=platforms, variable=platform_var, width=140, state="readonly", height=30, dropdown_fg_color="#2B2B2B"); platform_combo.grid(row=0, column=1, padx=(5, 6)); platform_var.trace_add("write", on_platform_change)
         customtkinter.CTkLabel(controls_frame, text="Type").grid(row=0, column=2, padx=(5,5), sticky="w"); type_var = tkinter.StringVar(); type_combo = customtkinter.CTkComboBox(controls_frame, values=[], variable=type_var, width=100, state="readonly", height=30, dropdown_fg_color="#2B2B2B"); type_combo.grid(row=0, column=3, padx=(2, 1), sticky="w")
         search_input_frame = customtkinter.CTkFrame(controls_frame, fg_color="transparent"); search_input_frame.grid(row=0, column=4, sticky="ew", padx=(10, 5))
@@ -2951,15 +3821,32 @@ if __name__ == "__main__":
         # Filter out Musixmatch if present
         filtered_keys = [key for key in credential_keys if key != "Musixmatch"]
         sorted_platform_keys = sorted(filtered_keys)
-        print(f"[Settings Tabs] Will display tabs for: {sorted_platform_keys}")
+        
+        # --- Detect installed modules ---
+        detected_module_folders = []
+        if 'MODULES_DIR' in globals() and os.path.isdir(MODULES_DIR):
+            try:
+                detected_module_folders = [d.lower() for d in os.listdir(MODULES_DIR) if os.path.isdir(os.path.join(MODULES_DIR, d))]
+                logging.info(f"[Settings Tabs] Detected module folders: {detected_module_folders}")
+            except Exception as e:
+                logging.error(f"[Settings Tabs] Error listing module directories: {e}")
+        else:
+            logging.warning("[Settings Tabs] MODULES_DIR not found or not a directory.")
+        # --- End module detection ---
+
+        print(f"[Settings Tabs] Will display tabs for platforms present in DEFAULT_SETTINGS and detected in modules folder: {sorted_platform_keys}")
 
         # <<< Modified loop: Use platform key directly for tab name and frame storage >>>
         for platform_key in sorted_platform_keys:
-            # Add the tab using the key (e.g., "AppleMusic") as the name
-            platform_tab_frame = settings_tabview.add(platform_key)
-            # Store the frame using the key
-            credential_tab_frames[platform_key] = platform_tab_frame
-            # print(f"  -> Added placeholder tab: {platform_key}") # <<< Commented out
+            # <<< ADDED CHECK: Only create tab if module folder exists >>>
+            if platform_key.lower() in detected_module_folders:
+                # Add the tab using the key (e.g., "AppleMusic") as the name
+                platform_tab_frame = settings_tabview.add(platform_key)
+                # Store the frame using the key
+                credential_tab_frames[platform_key] = platform_tab_frame
+                # print(f"  -> Added placeholder tab: {platform_key}") # <<< Commented out
+            else:
+                logging.info(f"[Settings Tabs] Skipping tab for '{platform_key}' as its module folder was not detected.")
 
         # Save Controls Frame (Remains the same)
         save_controls_frame = customtkinter.CTkFrame(settings_tab, fg_color="transparent"); save_controls_frame.pack(side="bottom", anchor="se", padx=10, pady=(0, 10))
@@ -3080,7 +3967,7 @@ if __name__ == "__main__":
         modules_title = customtkinter.CTkLabel(about_frame, text="MODULES", font=section_header_font, text_color=section_header_color)
         modules_title.pack(pady=(20, 5))
         modules_frame = customtkinter.CTkFrame(about_frame, fg_color="transparent"); modules_frame.pack(fill="x", padx=20, pady=(0, 10))
-        # --- MODIFIED: Added Beatsource ---
+        
         module_buttons_data = [
             ("Apple Music", "https://github.com/yarrm80s/orpheusdl-applemusic-basic"),
             ("Beatport", "https://github.com/Dniel97/orpheusdl-beatport"),
@@ -3098,6 +3985,7 @@ if __name__ == "__main__":
             ("Qobuz (acc)", "https://github.com/yarrm80s/orpheusdl-qobuz"),
             ("Qobuz (id/tok)", "https://github.com/thekvt/orpheusdl-qobuz"),
             ("SoundCloud", "https://github.com/yarrm80s/orpheusdl-soundcloud"),
+            ("Spotify", "https://github.com/bascurtiz/orpheusdl-spotify"),
             ("Tidal", "https://github.com/Dniel97/orpheusdl-tidal")
         ]
         # Keep buttons sorted alphabetically by name
@@ -3133,9 +4021,6 @@ if __name__ == "__main__":
                 hover_color="#1F6AA5" # Consistent hover color
             )
             button.grid(row=row, column=col, padx=button_padx, pady=button_pady, sticky="nsew")
-
-        # --- Update Status Bar ---
-        # ... existing code ...
 
         # --- Disable buttons if Orpheus failed to initialize ---
         # Check orpheus_instance which was initialized in this block
@@ -3180,6 +4065,19 @@ if __name__ == "__main__":
                  print(f"[Error] in _initial_ui_update: {e_init_update}")
 
         _initial_ui_update() # Call directly
+
+        # <<< Save initial default settings if they were just created by load_settings >>>
+        if initial_settings_were_defaulted:
+            print("[Main Loop Start] Attempting to save initially created default settings to disk...")
+            try:
+                save_success = save_settings(show_confirmation=False) # Save the defaults without a popup
+                if save_success:
+                    print("[Main Loop Start] Successfully saved initial default settings.")
+                else:
+                    print("[Main Loop Start] Failed to save initial default settings.")
+            except Exception as e_initial_save:
+                print(f"[Main Loop Start] Error during initial save of default settings: {e_initial_save}")
+
 
         app.mainloop() # Start the Tkinter event loop
 

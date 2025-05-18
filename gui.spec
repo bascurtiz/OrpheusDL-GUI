@@ -50,7 +50,10 @@ a = Analysis(
         'xmltodict',
         'pbkdf2',
         'srp',
-        'pytz'
+        'pytz',
+        'spotipy',
+        'librespot',
+        'pkce'
     ],
     excludes=['torch', 'cuda', 'pytorch', 'matplotlib', 'pandas', 'numpy'],
     hookspath=[],
