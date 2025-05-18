@@ -4078,6 +4078,10 @@ if __name__ == "__main__":
             except Exception as e_initial_save:
                 print(f"[Main Loop Start] Error during initial save of default settings: {e_initial_save}")
 
+        # Make sure the "temp" directory for downloads exists
+        temp_dir = "temp"
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir)
 
         app.mainloop() # Start the Tkinter event loop
 
