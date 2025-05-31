@@ -17,6 +17,7 @@ import threading
 import tkinter
 import tkinter.filedialog
 import tkinter.messagebox
+import shutil
 from CTkToolTip import CTkToolTip
 from PIL import Image
 from pathlib import Path
@@ -25,6 +26,7 @@ from tqdm import tqdm
 from urllib.parse import urlparse
 import traceback
 import logging
+import webbrowser
 
 def _simple_slugify(text):
     if not text: return None
@@ -50,17 +52,16 @@ class QueueLogHandler(logging.Handler):
         self.log_queue = log_queue
 
     def emit(self, record):
+        import re
         global current_settings
         is_debug_mode = current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False)
 
         if is_debug_mode:
-            log_entry = f"[{record.levelname}] {self.format(record)}"
+            log_entry = f"[{record.levelname}] {self.format(record)}\n"
             self.log_queue.put(log_entry)
             return
-        
         if record.levelno < logging.WARNING:
             return        
-        
         is_beatsource_404_warning = (
             record.name == 'root' and
             record.levelname == 'WARNING' and
@@ -68,22 +69,37 @@ class QueueLogHandler(logging.Handler):
         )
         if is_beatsource_404_warning:
             return
-        
         msg_content = record.getMessage()        
         
         if "Librespot:AudioKeyManager" in record.name and "Audio key error" in msg_content:
             return            
-        
         if "modules.spotify" in record.name and "Rate limit suspected" in msg_content:
             return            
-        
         if record.name == 'root' and record.levelname == 'ERROR' and "SpotifyAuthError" in msg_content:
             return
-        
         if record.levelno == logging.INFO and ':' in record.name:
             return        
         
-        log_entry = f"[{record.levelname}] {self.format(record)}"
+        cleaned_msg = self.format(record)
+        cleaned_msg = re.sub(r' - \w+ - ', ' - ', cleaned_msg)
+        
+        if "Track download attempt" in cleaned_msg and "failed for" in cleaned_msg:            
+            attempt_match = re.search(r'Track download attempt (\d+) failed for \w+\. Retrying in (\d+) seconds', cleaned_msg)
+            if attempt_match:
+                attempt_num = attempt_match.group(1)
+                retry_seconds = attempt_match.group(2)
+                cleaned_msg = re.sub(r'Track download attempt \d+ failed for \w+\. Retrying in \d+ seconds.*', 
+                                   f'Download attempt {attempt_num} failed. Retrying in {retry_seconds} seconds...', cleaned_msg)
+        
+        if "Track download failed for" in cleaned_msg and "Module get_track_download returned None" in cleaned_msg:
+            if "after 3 attempts" in cleaned_msg:
+                cleaned_msg = re.sub(r'Track download failed for \w+: Module get_track_download returned None after \d+ attempts.*', 
+                                   'Failed after 3 attempts (likely due to rate-limiting)', cleaned_msg)
+            else:
+                cleaned_msg = re.sub(r'Track download failed for \w+: Module get_track_download returned None.*', 
+                                   'Download failed (likely due to rate-limiting)', cleaned_msg)
+        
+        log_entry = f"[{record.levelname}] {cleaned_msg}\n"
         self.log_queue.put(log_entry)
 
 def setup_logging(log_queue):
@@ -307,13 +323,32 @@ class QualityEnum(enum.Enum):
     HIGH = 2
     LOW = 3
 
-def deep_merge(dict1, dict2):
-    """Deep merge two dictionaries."""
-    for key, value in dict2.items():
-        if key in dict1 and isinstance(dict1[key], dict) and isinstance(value, dict):
-            deep_merge(dict1[key], value)
+def deep_merge(dict1, dict2, keys_to_overwrite_if_dicts=None):
+    """Deep merge two dictionaries.
+    
+    Args:
+        dict1: The dictionary to merge into.
+        dict2: The dictionary to merge from.
+        keys_to_overwrite_if_dicts: A list of keys for which, if both dict1[key]
+                                     and dict2[key] are dictionaries, dict1[key]
+                                     will be replaced by dict2[key] instead of
+                                     their contents being recursively merged.
+    """
+    if keys_to_overwrite_if_dicts is None:
+        keys_to_overwrite_if_dicts = []
+
+    for key, value2 in dict2.items():
+        if key in dict1:
+            value1 = dict1[key]
+            if isinstance(value1, dict) and isinstance(value2, dict):
+                if key in keys_to_overwrite_if_dicts:
+                    dict1[key] = value2
+                else:
+                    deep_merge(value1, value2, keys_to_overwrite_if_dicts) 
+            else:
+                dict1[key] = value2
         else:
-            dict1[key] = value
+            dict1[key] = value2
     return dict1
 
 def load_settings():
@@ -431,8 +466,58 @@ def save_settings(show_confirmation: bool = True):
     updated_gui_settings = {"globals": {}, "credentials": {}}
     parse_errors = []
     for key_path_str, var in settings_vars.get("globals", {}).items():
+        if key_path_str == "advanced.codec_conversions":
+            print(f"[Save Settings DEBUG - Codec Processing] '{key_path_str}'. Var type: {type(var)}")
+            if isinstance(var, dict):
+                keys = key_path_str.split('.')
+                temp_dict = updated_gui_settings["globals"]
+                for k_idx, k_part in enumerate(keys[:-1]):
+                    if k_part not in temp_dict: temp_dict[k_part] = {}
+                    temp_dict = temp_dict[k_part]
+                
+                final_dict_key = keys[-1]
+                codec_conversions_to_save = {}
+                grouped_vars = {}
+                print("[SaveSettings Codec DEBUG] Raw StringVar values before grouping:")
+                for k_in, v_in in var.items():
+                    if isinstance(v_in, tkinter.Variable):
+                        print(f"  - {k_in}: '{v_in.get()}'")
+                    else:
+                        print(f"  - {k_in}: NOT A TKINTER VAR (type: {type(v_in)})")
+
+                for inner_key, tkinter_var_instance in var.items():
+                    if not isinstance(tkinter_var_instance, tkinter.Variable):
+                        print(f"[Save Settings Codec WARN] Item '{inner_key}' in codec_conversions dict is not a tkinter.Variable. Skipping.")
+                        continue
+                    actual_value = tkinter_var_instance.get()
+                    base_key = inner_key.replace('_source', '').replace('_target', '')
+                    if base_key not in grouped_vars: grouped_vars[base_key] = {}
+
+                    if inner_key.endswith('_source'):
+                        grouped_vars[base_key]['source'] = actual_value
+                    elif inner_key.endswith('_target'):
+                        grouped_vars[base_key]['target'] = actual_value
+
+                print(f"[SaveSettings Codec DEBUG] Grouped vars: {grouped_vars}")
+
+                for base_key, pair_values in grouped_vars.items():
+                    source_val = pair_values.get('source')
+                    target_val = pair_values.get('target')
+                    if source_val and target_val:
+                        codec_conversions_to_save[source_val] = target_val
+                    elif source_val and not target_val:
+                        print(f"[SaveSettings Codec WARN] Missing target for source '{source_val}' (base_key: {base_key}). Will not be saved.")
+                    elif not source_val and target_val:
+                        print(f"[SaveSettings Codec WARN] Missing source for target '{target_val}' (base_key: {base_key}). Will not be saved.")
+                
+                temp_dict[final_dict_key] = codec_conversions_to_save
+                print(f"[SaveSettings Codec DEBUG] Prepared '{final_dict_key}': {temp_dict[final_dict_key]}")
+            else:
+                print(f"[Save Settings WARN] 'advanced.codec_conversions' var is not a dict as expected. Type: {type(var)}. Skipping save logic for it.")
+            continue
         if not isinstance(var, tkinter.Variable):
-            if isinstance(var, dict) and not var: pass; continue
+            print(f"[Save Settings WARN] Skipping non-Variable or unhandled dict: {key_path_str} of type {type(var)} during general processing.")
+            continue
         raw_value = var.get(); keys = key_path_str.split('.')
         try:
             current_data = updated_gui_settings["globals"]; original_value_scope = DEFAULT_SETTINGS["globals"]; valid_default_path = True
@@ -463,7 +548,7 @@ def save_settings(show_confirmation: bool = True):
             elif original_value is None: final_value = str(raw_value)
             else: final_value = str(raw_value)
             current_data[setting_key] = final_value
-        except Exception as e: error_msg = f"Error processing global setting '{key_path_str}': {e}"; print(f"[Save Settings] {error_msg}", exc_info=True); parse_errors.append(error_msg)
+        except Exception as e: error_msg = f"Error processing global setting '{key_path_str}': {e}"; print(f"[Save Settings] {error_msg}", flush=True); traceback.print_exc(); parse_errors.append(error_msg)
     for platform_name, fields in settings_vars.get("credentials", {}).items():
          if platform_name not in updated_gui_settings["credentials"]: updated_gui_settings["credentials"][platform_name] = {}
          for field_key, var in fields.items():
@@ -494,7 +579,7 @@ def save_settings(show_confirmation: bool = True):
             if orpheus_platform not in mapped_orpheus_updates["modules"]: mapped_orpheus_updates["modules"][orpheus_platform] = {}
             mapped_orpheus_updates["modules"][orpheus_platform] = creds.copy()
     print("[Save Settings] Merging validated UI changes into existing settings structure...")
-    final_settings_to_save = deep_merge(existing_settings, mapped_orpheus_updates)
+    final_settings_to_save = deep_merge(existing_settings, mapped_orpheus_updates, keys_to_overwrite_if_dicts=["codec_conversions"])
     try:
         print(f"[Save Settings] Attempting to write merged settings to {CONFIG_FILE_PATH}")
         config_dir = os.path.dirname(CONFIG_FILE_PATH)
@@ -502,7 +587,7 @@ def save_settings(show_confirmation: bool = True):
         with open(CONFIG_FILE_PATH, 'w', encoding='utf-8') as f: json.dump(final_settings_to_save, f, indent=4, ensure_ascii=False, sort_keys=True)
         print(f"[Save Settings] Settings successfully written to {CONFIG_FILE_PATH}.")
         print("[Save Settings] Updating in-memory 'current_settings' from GUI values...")
-        deep_merge(current_settings, updated_gui_settings)
+        deep_merge(current_settings, updated_gui_settings, keys_to_overwrite_if_dicts=["codec_conversions"])
         print("[Save Settings] In-memory 'current_settings' updated.")
         print("[Save Settings] Re-initializing Orpheus instance with updated settings...")
         orpheus_instance = None
@@ -579,7 +664,9 @@ def handle_save_settings():
         if 'save_status_var' in globals() and save_status_var:
             save_status_var.set(f"Error handling save: {type(e).__name__}")
         show_centered_messagebox("Save Error", err_msg, dialog_type="error")
-        print(f"[DEBUG] Error in handle_save_settings: {err_msg}", exc_info=True)
+        print(f"[DEBUG] Error in handle_save_settings: {err_msg}", flush=True)
+        import traceback
+        traceback.print_exc()
     finally:
         if 'app' in globals() and app and app.winfo_exists() and 'save_status_var' in globals() and save_status_var:
             app.after(4000, lambda: save_status_var.set("") if save_status_var else None)
@@ -784,14 +871,102 @@ def paste_text():
     finally: hide_context_menu()
 
 def log_to_textbox(msg, error=False):
-    global _last_message_was_empty, log_textbox
+    global _last_message_was_empty, log_textbox, log_scrollbar, app
     try:
         if 'log_textbox' not in globals() or not log_textbox or not log_textbox.winfo_exists(): return
-        content_to_insert = msg; is_current_empty = not content_to_insert.strip()
+        if "Librespot:Session - Failed reading packet! Failed to receive packet" in msg:
+            return
+        if "Librespot authentication failed during session creation: BadCredentials" in msg:
+            return
+        if "Failed to create Librespot session from existing OAuth credentials. Forcing new OAuth flow." in msg:
+            return
+        if "If the browser does not open, please copy the URL above and paste it manually." in msg:
+            content_to_insert = f"\n{msg}\n"
+        else:
+            content_to_insert = msg
+        if "=== Track" in content_to_insert and "downloaded ===" in content_to_insert and not "completed" in content_to_insert:
+            content_to_insert = "=== Track completed ===\n"
+        elif "=== Track" in content_to_insert and "skipped ===" in content_to_insert and not content_to_insert.strip() == "=== Track skipped ===":
+            content_to_insert = "=== Track skipped ===\n"
+        elif "=== Track" in content_to_insert and "failed (" in content_to_insert and ") ===" in content_to_insert:
+            content_to_insert = "=== Track failed ===\n"
+        
+        is_current_empty = not content_to_insert.strip()
         if is_current_empty and _last_message_was_empty: return
         _last_message_was_empty = is_current_empty
         if content_to_insert:
-            log_textbox.configure(state="normal"); log_textbox.insert("end", content_to_insert); log_textbox.see("end"); log_textbox.configure(state="disabled")
+            log_textbox.configure(state="normal")
+            
+            try:
+                log_textbox.tag_configure("error", foreground="#FF4444")
+                log_textbox.tag_configure("detail_text", foreground="#A0A0A0")
+                log_textbox.tag_configure("skipped_track", foreground="#FFBF00")
+                log_textbox.tag_configure("downloaded_track", foreground="#00C851")
+                log_textbox.tag_configure("normal", foreground="")
+                log_textbox.tag_configure("hyperlink", foreground="royal blue", underline=True)
+                log_textbox.tag_bind("hyperlink", "<Enter>", lambda e: log_textbox.config(cursor="hand2"))
+                log_textbox.tag_bind("hyperlink", "<Leave>", lambda e: log_textbox.config(cursor=""))
+                log_textbox.tag_bind("hyperlink", "<Button-1>", _on_hyperlink_click)
+            except: pass
+
+            url_regex = r'(https?://[^\s<>"]+|www\\.[^\s<>"]+)'
+            matches = list(re.finditer(url_regex, content_to_insert))
+
+            if matches:
+                last_end = 0
+                for match in matches:
+                    start, end = match.span()
+                    if start > last_end:
+                        non_url_segment = content_to_insert[last_end:start]
+                        tag_for_segment = "normal"
+                        if "=== Track" in non_url_segment and ("downloaded ===" in non_url_segment or "completed ===" in non_url_segment): tag_for_segment = "downloaded_track"
+                        elif "=== Track" in non_url_segment and "skipped ===" in non_url_segment: tag_for_segment = "skipped_track"
+                        elif "=== Track" in non_url_segment and (("failed (" in non_url_segment and ") ===" in non_url_segment) or "failed ===" in non_url_segment): tag_for_segment = "error"
+                        elif ("[INFO]" in non_url_segment or "[WARNING]" in non_url_segment or 
+                              "[ERROR]" in non_url_segment or "[CRITICAL]" in non_url_segment): tag_for_segment = "detail_text"
+                        elif ("Download stop requested..." in non_url_segment or 
+                              non_url_segment.strip() == "Download Cancelled." or 
+                              non_url_segment.strip() == "Download Cancelled (during file transfer)."): tag_for_segment = "skipped_track"
+                        elif "Track file already exists" in non_url_segment: tag_for_segment = "detail_text"
+                        log_textbox.insert("end", non_url_segment, (tag_for_segment,))
+                    
+                    url_text = content_to_insert[start:end]
+                    log_textbox.insert("end", url_text, ("hyperlink",))
+                    last_end = end
+                
+                if last_end < len(content_to_insert):
+                    remaining_segment = content_to_insert[last_end:]
+                    tag_for_segment = "normal"
+                    if "=== Track" in remaining_segment and ("downloaded ===" in remaining_segment or "completed ===" in remaining_segment): tag_for_segment = "downloaded_track"
+                    elif "=== Track" in remaining_segment and "skipped ===" in remaining_segment: tag_for_segment = "skipped_track"
+                    elif "=== Track" in remaining_segment and (("failed (" in remaining_segment and ") ===" in remaining_segment) or "failed ===" in remaining_segment): tag_for_segment = "error"
+                    elif ("[INFO]" in remaining_segment or "[WARNING]" in remaining_segment or 
+                          "[ERROR]" in remaining_segment or "[CRITICAL]" in remaining_segment): tag_for_segment = "detail_text"
+                    elif ("Download stop requested..." in remaining_segment or 
+                          remaining_segment.strip() == "Download Cancelled." or 
+                          remaining_segment.strip() == "Download Cancelled (during file transfer)."): tag_for_segment = "skipped_track"
+                    elif "Track file already exists" in remaining_segment: tag_for_segment = "detail_text"
+                    log_textbox.insert("end", remaining_segment, (tag_for_segment,))
+            else:
+                tag_to_use = "normal"
+                if "=== Track" in content_to_insert and ("downloaded ===" in content_to_insert or "completed ===" in content_to_insert): tag_to_use = "downloaded_track"
+                elif "=== Track" in content_to_insert and "skipped ===" in content_to_insert: tag_to_use = "skipped_track"
+                elif "=== Track" in content_to_insert and (("failed (" in content_to_insert and ") ===" in content_to_insert) or "failed ===" in content_to_insert): tag_to_use = "error"
+                elif ("[INFO]" in content_to_insert or "[WARNING]" in content_to_insert or 
+                      "[ERROR]" in content_to_insert or "[CRITICAL]" in content_to_insert): tag_to_use = "detail_text"
+                elif ("Download stop requested..." in content_to_insert or 
+                      content_to_insert.strip() == "Download Cancelled." or 
+                      content_to_insert.strip() == "Download Cancelled (during file transfer)."): tag_to_use = "skipped_track"
+                elif "Track file already exists" in content_to_insert: tag_to_use = "detail_text"
+                log_textbox.insert("end", content_to_insert, (tag_to_use,))
+
+            log_textbox.see("end")
+            log_textbox.configure(state="disabled")
+            
+            try:
+                if 'app' in globals() and app and app.winfo_exists() and 'log_scrollbar' in globals() and log_scrollbar and log_scrollbar.winfo_exists():
+                    app.after(0, lambda: _check_and_toggle_text_scrollbar(log_textbox, log_scrollbar))
+            except: pass
     except NameError: print("[Debug] log_to_textbox: NameError (likely widget not ready)")
     except tkinter.TclError as e: print(f"TclError in log_to_textbox (widget destroyed?): {e}")
     except Exception as e:
@@ -922,6 +1097,29 @@ def _check_and_toggle_scrollbar(tree_widget, scrollbar_widget):
         if isinstance(e, tkinter.TclError): pass
         else: print(f"Error checking/toggling scrollbar: {e}")
 
+def _check_and_toggle_text_scrollbar(text_widget, scrollbar_widget):
+    """Check if text widget needs scrollbar and show/hide accordingly"""
+    if not text_widget or not text_widget.winfo_exists() or not scrollbar_widget or not scrollbar_widget.winfo_exists():         
+        return
+    try:        
+        text_widget.update_idletasks()
+        first, last = text_widget.yview()
+        is_content_fully_visible = (last - first) >= (1.0 - 1e-9)
+
+        if not is_content_fully_visible:
+            if not scrollbar_widget.winfo_ismapped():
+                scrollbar_widget.grid(row=0, column=1, sticky='ns') 
+                text_widget.update_idletasks()
+        else:            
+            if scrollbar_widget.winfo_ismapped():                 
+                scrollbar_widget.grid_remove()
+                text_widget.update_idletasks()
+    except Exception as e:
+        if isinstance(e, tkinter.TclError):             
+            pass
+        else: 
+            print(f"Error checking/toggling text scrollbar: {e}")
+
 class QueueWriter(io.TextIOBase):
     def __init__(self, queue_instance): self.queue = queue_instance
 
@@ -967,19 +1165,20 @@ class QueueWriter(io.TextIOBase):
             else:
                 final_msg = msg.replace('\r', '').strip()
                 if final_msg:
+                   if final_msg == "Track file already exists":
+                       final_msg = "[INFO] Track file already exists"
+                   elif "Pausing for" in final_msg and "before next download attempt" in final_msg:
+                       self.queue.put('\n')
                    self.queue.put(final_msg + '\n')
 
         return len(msg)
 
     def flush(self):
         pass
-
     def readable(self):
         return False
-
     def seekable(self):
         return False
-
     def writable(self):
         return True
     
@@ -1275,13 +1474,12 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         else: print(f"ERROR: Unknown media type '{media_type.name if hasattr(media_type, 'name') else media_type}' encountered.")
 
         if is_cancelled: print("\nDownload Cancelled.")
-        else: print("\nDownload process finished.")
 
     except (DownloadCancelledError, AuthenticationError, DownloadError, NetworkError, OrpheusdlError) as e:
         download_exception_occurred = True
         if isinstance(e, DownloadCancelledError):
              is_cancelled = True; download_exception_occurred = False
-             print("\nDownload Cancelled (during file transfer).")
+             print("Download Cancelled (during file transfer).")
         else: error_type = type(e).__name__; print(f"\nERROR: {error_type}.\nDetails: {e}\n")
     except Exception as e:
         download_exception_occurred = True
@@ -1289,14 +1487,21 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         print(f"\nUNEXPECTED ERROR during download thread.\nType: {error_type}\nDetails: {error_repr}\nTraceback:\n{tb_str}")
     finally:
         end_time = datetime.datetime.now(); total_duration = end_time - start_time; formatted_time = beauty_format_seconds(total_duration.total_seconds())
-        final_status_message = "Download Cancelled." if is_cancelled else "Download Finished."
-        summary_message = f"{final_status_message}\nTotal time taken: {formatted_time}\n"
-        print(summary_message)
+        time_taken_message = f"Total time taken: {formatted_time}\n"
+
+        if is_cancelled:            
+            pass
+        else:
+            final_status_message = "Download Finished." 
+            print(final_status_message + "\n")
+        
+        print(time_taken_message)
 
         sys.stdout = original_stdout
         sys.stderr = original_stderr
 
         download_successful = not is_cancelled and not download_exception_occurred
+
         def final_ui_update(success=False):
             global progress_bar, stop_button, download_process_active, app, file_download_queue, current_batch_output_path, current_settings, DEFAULT_SETTINGS
 
@@ -1556,6 +1761,7 @@ def display_results(results):
     global search_results_data, tree, scrollbar, app, platform_var, type_var    
     clear_treeview(); search_results_data = []
     item_number = 1
+    seen_ids = set()
     local_DownloadTypeEnum = DownloadTypeEnum
     try:
         current_search_type_str = type_var.get() if ('type_var' in globals() and type_var) else "track"
@@ -1576,13 +1782,15 @@ def display_results(results):
         year = str(result.get('year', '-'))
         explicit = result.get('explicit', '')
         additional_str = result.get('quality', 'N/A')
-
+        unique_tree_iid = f"item_{item_number}"
+        
         result_entry = {
             "id": res_id, "number": str(item_number), "title": name,
             "artist": artist_str, "duration": duration_str, "year": year,
             "additional": additional_str, "explicit": explicit,
             "platform": current_platform_str, "type": current_search_type_str,
-            "raw_result": result.get('raw_result')
+            "raw_result": result.get('raw_result'),
+            "tree_iid": unique_tree_iid
         }
         if current_search_type_str == "artist":
             result_entry["title"] = ""
@@ -1614,14 +1822,23 @@ def display_results(results):
                         explicit,
                         res_id
                     )
-
-                tree.insert("", "end", iid=res_id, values=values)
+                tree.insert("", "end", iid=unique_tree_iid, values=values)
                 item_number += 1
+                if res_id in seen_ids:
+                    print(f"[GUI Debug] Duplicate ID detected: {res_id} (item {item_number-1})")
+                seen_ids.add(res_id)
             else:
                 break
         except NameError: break
-        except tkinter.TclError as e: print(f"TclError inserting into treeview (widget destroyed?): {e}"); break
-        except Exception as e: print(f"Error inserting into treeview: {e}")    
+        except tkinter.TclError as e: 
+            print(f"TclError inserting into treeview (widget destroyed?): {e}")
+            print(f"[GUI Debug] Failed to insert item {item_number} with iid '{unique_tree_iid}' and res_id '{res_id}'")
+            break
+        except Exception as e: 
+            print(f"Error inserting into treeview: {e}")
+            print(f"[GUI Debug] Failed to insert item {item_number} with iid '{unique_tree_iid}' and res_id '{res_id}'")
+    
+    print(f"[GUI Debug] Displayed {len(search_results_data)} items, {len(seen_ids)} unique IDs")
     try:
         if 'app' in globals() and app and app.winfo_exists() and 'tree' in globals() and tree and tree.winfo_exists() and 'scrollbar' in globals() and scrollbar and scrollbar.winfo_exists():
             app.after(50, lambda: _check_and_toggle_scrollbar(tree, scrollbar))
@@ -1743,10 +1960,17 @@ def on_tree_select(event):
         selection = tree.selection()
         if selection:
             selected_iid = selection[0]
-            selected_item_data = next((item for item in search_results_data if str(item.get('id')) == str(selected_iid)), None)
-            if selected_item_data: selection_var.set(selected_item_data['number']); search_download_button.configure(state="normal")
-            else: print(f"Selected iid {selected_iid} not found."); selection_var.set(""); search_download_button.configure(state="disabled")
-        else: selection_var.set(""); search_download_button.configure(state="disabled")
+            selected_item_data = next((item for item in search_results_data if str(item.get('tree_iid')) == str(selected_iid)), None)
+            if selected_item_data: 
+                selection_var.set(selected_item_data['number'])
+                search_download_button.configure(state="normal")
+            else: 
+                print(f"Selected iid {selected_iid} not found in search_results_data.")
+                selection_var.set("")
+                search_download_button.configure(state="disabled")
+        else: 
+            selection_var.set("")
+            search_download_button.configure(state="disabled")
     except NameError: pass
     except tkinter.TclError as e: print(f"TclError in tree select (widget destroyed?): {e}")
     except Exception as e: print(f"Error in tree select: {e}")
@@ -1899,7 +2123,6 @@ def sort_results(column):
     global sort_states, search_results_data, tree
     try:
         if 'tree' not in globals() or not tree or not tree.winfo_exists(): return
-
         is_numeric = column in ["#", "Year"]; is_reverse = sort_states.get(column, False)
 
         def sort_key(item):
@@ -1915,7 +2138,8 @@ def sort_results(column):
             try:
                 if 'tree' in globals() and tree and tree.winfo_exists():
                     values = ( item_data.get('number', ''), item_data.get('title', ''), item_data.get('artist', ''), item_data.get('duration', ''), item_data.get('year', ''), item_data.get('additional', ''), item_data.get('explicit', ''), item_data.get('id', '') )
-                    tree.insert("", "end", iid=item_data['id'], values=values)
+                    tree_iid = item_data.get('tree_iid', item_data.get('id', ''))
+                    tree.insert("", "end", iid=tree_iid, values=values)
                 else: break
             except NameError: break
             except tkinter.TclError as e: print(f"TclError repopulating sorted treeview (widget destroyed?): {e}"); break
@@ -1939,20 +2163,42 @@ def _update_settings_tab_widgets():
         print("Refreshing Global Settings tab UI from current_settings...")
     try:
         for key, var in settings_vars.get("globals", {}).items():
-            if key in ["advanced.codec_conversions", "advanced.conversion_flags"]:
+            if key in ["advanced.conversion_flags"]:
                 continue
 
-            if not isinstance(var, tkinter.Variable):
-                 if isinstance(var, dict) and not var:
-                     pass
-                 else:
-                    continue
+            if key == "advanced.codec_conversions":
+                current_codec_conversions_setting = current_settings.get("globals", {}).get("advanced", {}).get("codec_conversions", {})
+                
+                if isinstance(var, dict) and isinstance(current_codec_conversions_setting, dict):
+                    for source_codec_from_settings, target_codec_from_settings in current_codec_conversions_setting.items():
+                        source_var_key = f"{source_codec_from_settings}_source"
+                        target_var_key = f"{source_codec_from_settings}_target"
 
-            keys = key.split('.'); temp_dict = current_settings.get("globals", {}); valid_path = True
-            for k in keys:
-                if isinstance(temp_dict, dict): temp_dict = temp_dict.get(k)
-                else: valid_path = False; break
+                        if source_var_key in var and isinstance(var[source_var_key], tkinter.StringVar):
+                            try: var[source_var_key].set(source_codec_from_settings)
+                            except Exception as e_set_src: print(f"Error setting source var {source_var_key}: {e_set_src}")
+
+                        if target_var_key in var and isinstance(var[target_var_key], tkinter.StringVar):
+                            try: var[target_var_key].set(target_codec_from_settings)
+                            except Exception as e_set_tgt: print(f"Error setting target var {target_var_key}: {e_set_tgt}")
+                continue
+            if not isinstance(var, tkinter.Variable):
+                 if isinstance(var, dict):
+                     if not var:
+                         pass 
+                 else:
+                    print(f"[Update Settings UI WARN] Skipping key '{key}' in settings_vars: value is type {type(var)}, not a tkinter.Variable or handled dict.")
+            keys = key.split('.')
+            temp_dict = current_settings.get("globals", {})
+            valid_path = True
+            for k_part in keys:
+                if isinstance(temp_dict, dict):
+                    temp_dict = temp_dict.get(k_part)
+                else:
+                    valid_path = False
+                    break
             value_from_dict = temp_dict if valid_path else None
+            
             if value_from_dict is not None:
                 try:
                     if isinstance(var, tkinter.BooleanVar):
@@ -2049,9 +2295,9 @@ def _handle_settings_tab_change():
         traceback.print_exc()
 
 def update_search_platform_dropdown():
-    """Updates the platform dropdown in the Search tab based on current settings."""
-    global platform_combo, platform_var, current_settings, DEFAULT_SETTINGS
-    if not all(var in globals() for var in ['platform_combo', 'platform_var', 'current_settings', 'DEFAULT_SETTINGS']):
+    """Updates the platform dropdown in the Search tab based on current settings AND installed modules."""
+    global platform_combo, platform_var, current_settings, DEFAULT_SETTINGS, installed_platform_keys
+    if not all(var in globals() for var in ['platform_combo', 'platform_var', 'current_settings', 'DEFAULT_SETTINGS', 'installed_platform_keys']):
         print("[Update Platforms] Critical variables not found. Skipping update.")
         return
 
@@ -2062,13 +2308,11 @@ def update_search_platform_dropdown():
     try:
         if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
             print("[Update Platforms] Refreshing Search tab platform dropdown...")
-
-        all_known_platform_names = DEFAULT_SETTINGS.get("credentials", {}).keys()
+        
+        base_available_platforms = [pk for pk in installed_platform_keys if pk != "Musixmatch"]
         configured_platforms = []
-        for platform_name_iter in all_known_platform_names:
-            if platform_name_iter == "Musixmatch":
-                continue
 
+        for platform_name_iter in base_available_platforms:
             default_platform_fields = DEFAULT_SETTINGS.get("credentials", {}).get(platform_name_iter, {})
             if not default_platform_fields:
                 configured_platforms.append(platform_name_iter)
@@ -2076,10 +2320,6 @@ def update_search_platform_dropdown():
 
             current_platform_creds = current_settings.get("credentials", {}).get(platform_name_iter, {})
             is_fully_filled = True
-            if not default_platform_fields:
-                configured_platforms.append(platform_name_iter)
-                continue
-
             for field_key in default_platform_fields.keys():
                 field_value = current_platform_creds.get(field_key, "")                
                 if isinstance(default_platform_fields[field_key], bool):
@@ -2091,23 +2331,23 @@ def update_search_platform_dropdown():
             if is_fully_filled:
                 configured_platforms.append(platform_name_iter)
         
-        platforms = sorted(configured_platforms)
+        platforms_to_show = sorted(configured_platforms)
         
         current_selection = platform_var.get()
-        platform_combo.configure(values=platforms)
+        platform_combo.configure(values=platforms_to_show)
 
-        if platforms:
-            if current_selection in platforms:
+        if platforms_to_show:
+            if current_selection in platforms_to_show:
                 platform_var.set(current_selection)
             else:
-                platform_var.set(platforms[0])
+                platform_var.set(platforms_to_show[0])
         else:
             platform_var.set("")
         
         on_platform_change()
 
         if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-            print(f"[Update Platforms] Dropdown updated with: {platforms}. Selected: {platform_var.get()}")
+            print(f"[Update Platforms] Dropdown updated with: {platforms_to_show}. Selected: {platform_var.get()}")
 
     except tkinter.TclError as e:
         if "invalid command name" in str(e):
@@ -2118,6 +2358,60 @@ def update_search_platform_dropdown():
         print(f"[Update Platforms] Unexpected error: {e}")
         import traceback
         traceback.print_exc()
+
+def _on_hyperlink_click(event):
+    global log_textbox
+    if 'log_textbox' not in globals() or not log_textbox or not log_textbox.winfo_exists():
+        return
+    try:
+        index = log_textbox.index(f"@{event.x},{event.y}")
+        
+        tag_ranges = log_textbox.tag_ranges("hyperlink")
+        
+        clicked_url = None
+        for i in range(0, len(tag_ranges), 2):
+            start = tag_ranges[i]
+            end = tag_ranges[i+1]
+            if log_textbox.compare(index, ">=", start) and log_textbox.compare(index, "<", end):
+                clicked_url = log_textbox.get(start, end)
+                break
+        
+        if clicked_url:            
+            if clicked_url.endswith('.') or clicked_url.endswith(')'):
+                 if not any(char.isalnum() for char in clicked_url[-3:]):
+                    clicked_url = clicked_url[:-1]
+
+            print(f"Opening URL: {clicked_url}")
+            webbrowser.open_new_tab(clicked_url)
+    except Exception as e:
+        print(f"Error opening hyperlink: {e}")
+
+def _on_gui_exit():
+    """Handles cleanup when the GUI is closing."""
+    global app, _mutex_handle
+    print("[Exit] GUI closing. Cleaning up temp directory...")
+    try:
+        shutil.rmtree('temp', ignore_errors=True)
+        print("[Exit] Temp directory removed.")
+    except Exception as e:
+        print(f"[Exit] Error removing temp directory: {e}")
+    if platform.system() == "Windows" and _mutex_handle:
+        try:
+            from ctypes import windll, wintypes
+            CloseHandle = windll.kernel32.CloseHandle
+            CloseHandle.argtypes = [wintypes.HANDLE]
+            CloseHandle.restype = wintypes.BOOL
+            if CloseHandle(_mutex_handle):
+                print("[Instance Check] Released mutex.")
+            else:
+                print("[Instance Check] Failed to release mutex.")
+            _mutex_handle = None
+        except Exception as e:
+            print(f"[Instance Check] Error releasing mutex: {e}")
+
+    if 'app' in globals() and app and app.winfo_exists():
+        app.destroy()
+    print("[Exit] Application shutdown complete.")
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
@@ -2155,6 +2449,8 @@ if __name__ == "__main__":
         print(f"[Main Process {os.getpid()}] Starting application...")
         _SCRIPT_DIR = get_script_directory()
         try:
+            os.makedirs('temp', exist_ok=True)
+            print("[Init] Ensured temp directory exists.")
             os.chdir(_SCRIPT_DIR)
             print(f"[CWD] Changed working directory to: {_SCRIPT_DIR}")
         except Exception as e_chdir:
@@ -2189,15 +2485,22 @@ if __name__ == "__main__":
                 },
                 "artist_downloading": { "return_credited_albums": True, "separate_tracks_skip_downloaded": True },
                 "formatting": { "album_format": "{name}{explicit}", "playlist_format": "{name}{explicit}", "track_filename_format": "{track_number}. {name}", "single_full_path_format": "{name}", "enable_zfill": True, "force_album_format": False },
-                "codecs": { "proprietary_codecs": False, "spatial_codecs": True },
+                "codecs": {
+                    "proprietary_codecs": False,
+                    "spatial_codecs": True
+                },
                 "module_defaults": { "lyrics": "default", "covers": "default", "credits": "default" },
                 "lyrics": { "embed_lyrics": True, "embed_synced_lyrics": False, "save_synced_lyrics": True },
                 "covers": { "embed_cover": True, "main_compression": "high", "main_resolution": 1400, "save_external": False, "external_format": "png", "external_compression": "low", "external_resolution": 3000, "save_animated_cover": True },
                 "playlist": { "save_m3u": True, "paths_m3u": "absolute", "extended_m3u": True },
                 "advanced": {
                     "advanced_login_system": False,
-                    "codec_conversions": { "alac": "flac", "wav": "flac" },
-                    "conversion_flags": { "flac": { "compression_level": "5" } },
+                    "codec_conversions": { "alac": "flac", "wav": "flac", "vorbis": "vorbis" }, 
+                    "conversion_flags": {
+                        "flac": { "compression_level": "5" },
+                        "mp3": { "qscale:a": "0" },
+                        "aac": { "audio_bitrate": "256k" }
+                    },
                     "conversion_keep_original": False,
                     "cover_variance_threshold": 8,
                     "debug_mode": False,
@@ -2211,7 +2514,7 @@ if __name__ == "__main__":
                 "AppleMusic": { "get_original_cover": True, "print_original_cover_url": False, "lyrics_type": "standard", "lyrics_custom_ms_sync": False, "lyrics_language_override": "", "lyrics_syllable_sync": False, "email": "", "password": "", "force_region": "", "selected_language": "en" },
                 "Beatport": { "username": "", "password": "" },
                 "Beatsource": { "username": "", "password": "" },
-                "BugsMusic": { "username": "", "password": "" },
+                "Bugs": { "username": "", "password": "" },
                 "Deezer": { "client_id": "", "client_secret": "", "bf_secret": "", "email": "", "password": "" },
                 "Idagio": { "username": "", "password": "" }, 
                 "KKBOX": { "kc1_key": "", "secret_key": "", "email": "", "password": "" },
@@ -2224,6 +2527,27 @@ if __name__ == "__main__":
                 "Tidal": { "tv_atmos_token": "", "tv_atmos_secret": "", "mobile_atmos_hires_token": "", "mobile_hires_token": "", "enable_mobile": True, "prefer_ac4": False, "fix_mqa": True }
             }
         }
+        installed_platform_keys = []
+        if os.path.isdir(MODULES_DIR):
+            try:                
+                module_subdirs_in_dir = [d.lower() for d in os.listdir(MODULES_DIR) if os.path.isdir(os.path.join(MODULES_DIR, d))]
+                
+                default_credential_platform_names = list(DEFAULT_SETTINGS.get("credentials", {}).keys())
+
+                for platform_key in default_credential_platform_names:
+                    expected_subdir_name = platform_key.lower()
+                    
+                    if expected_subdir_name in module_subdirs_in_dir:
+                        installed_platform_keys.append(platform_key)
+                
+                installed_platform_keys = sorted(list(set(installed_platform_keys)))
+                print(f"[Module Check] Detected installed platform keys based on './modules/' subfolders: {installed_platform_keys}")
+            except Exception as e:
+                print(f"[Module Check] Error scanning './modules/' subdirectories: {e}. Proceeding with empty list.")
+                installed_platform_keys = []
+        else:
+            print(f"[Module Check] Modules directory '{MODULES_DIR}' not found. No external modules will be loaded.")
+            installed_platform_keys = []        
         output_queue = queue.Queue()
         stop_event = threading.Event()
         search_results_data = []
@@ -2300,7 +2624,6 @@ if __name__ == "__main__":
                 else:
                     print("[Tab Change] _handle_settings_tab_change or settings_tabview not ready for settings tab.")
 
-
         tabview = customtkinter.CTkTabview(master=app, command=_on_tab_change)
         tabview.pack(padx=10, pady=10, expand=True, fill="both")
         download_tab = tabview.add("Download")
@@ -2324,8 +2647,15 @@ if __name__ == "__main__":
         path_button = customtkinter.CTkButton(path_frame, text="Browse", width=100, height=30, command=lambda: browse_output_path(path_var_main), fg_color="#343638", hover_color="#1F6AA5"); path_button.grid(row=0, column=2, sticky="e", padx=5)
         open_path_button = customtkinter.CTkButton(path_frame, text="Open", width=100, height=30, command=open_download_path, fg_color="#343638", hover_color="#1F6AA5"); open_path_button.grid(row=0, column=3, sticky="e", padx=5)
         output_frame = customtkinter.CTkFrame(download_tab, fg_color="transparent"); output_frame.grid(row=2, column=0, columnspan=4, sticky="nsew", padx=15, pady=(15, 15)); output_frame.grid_rowconfigure(1, weight=1); output_frame.grid_columnconfigure(0, weight=1)
-        output_label = customtkinter.CTkLabel(output_frame, text="OUTPUT", text_color="#898c8d", font=("Segoe UI", 11)); output_label.grid(row=0, column=0, sticky="w", pady=(0, 3))
-        log_textbox = customtkinter.CTkTextbox(output_frame, wrap=tkinter.WORD, state='disabled', font=("Consolas", 12)); log_textbox.grid(row=1, column=0, sticky="nsew")
+        output_label = customtkinter.CTkLabel(output_frame, text="OUTPUT", text_color="#898c8d", font=("Segoe UI", 11)); output_label.grid(row=0, column=0, sticky="w", pady=(0, 3)) 
+        textbox_container = customtkinter.CTkFrame(output_frame, fg_color="#1D1E1E"); textbox_container.grid(row=1, column=0, sticky="nsew"); textbox_container.grid_columnconfigure(0, weight=1); textbox_container.grid_rowconfigure(0, weight=1); textbox_container.grid_columnconfigure(1, weight=0)  
+        log_textbox = tkinter.Text(textbox_container, wrap=tkinter.WORD, state='disabled', font=("Consolas", 10), 
+                                   bg="#1D1E1E", fg="#DCE4EE", insertbackground="#DCE4EE", 
+                                   selectbackground="#1F6AA5", selectforeground="#FFFFFF",
+                                   relief="flat", borderwidth=0)
+        log_textbox.grid(row=0, column=0, sticky="nsew", padx=(5,0), pady=3)
+        log_scrollbar = customtkinter.CTkScrollbar(textbox_container, command=log_textbox.yview); log_textbox.configure(yscrollcommand=log_scrollbar.set)
+        log_textbox.bind("<Configure>", lambda event: _check_and_toggle_text_scrollbar(log_textbox, log_scrollbar) if 'log_textbox' in globals() and log_textbox and log_textbox.winfo_exists() and 'log_scrollbar' in globals() and log_scrollbar and log_scrollbar.winfo_exists() else None)
         bottom_frame = customtkinter.CTkFrame(download_tab, fg_color="transparent"); bottom_frame.grid(row=3, column=0, columnspan=4, sticky="ew", padx=10, pady=(5, 10)); bottom_frame.grid_columnconfigure(0, weight=1)
         progress_bar = customtkinter.CTkProgressBar(bottom_frame); progress_bar.set(0); progress_bar.grid(row=0, column=0, sticky="ew", padx=(5, 5))
         clear_output_button = customtkinter.CTkButton(bottom_frame, text="Clear Output", width=100, height=30, command=clear_output_log, fg_color="#343638", hover_color="#1F6AA5"); clear_output_button.grid(row=0, column=1, sticky="e", padx=(5, 10))
@@ -2333,34 +2663,11 @@ if __name__ == "__main__":
         search_tab = tabview.add("Search"); search_main_frame = customtkinter.CTkFrame(search_tab, fg_color="transparent"); search_main_frame.pack(fill="both", expand=True, padx=9, pady=(10,0))
         controls_frame = customtkinter.CTkFrame(search_main_frame, fg_color="transparent"); controls_frame.pack(fill="x", pady=(5, 10)); controls_frame.grid_columnconfigure(4, weight=1)
         customtkinter.CTkLabel(controls_frame, text="Platform").grid(row=0, column=0, padx=(5,1), sticky="w")
-        
-        all_known_platform_names = DEFAULT_SETTINGS.get("credentials", {}).keys()
-        configured_platforms = []
-        for platform_name in all_known_platform_names:
-            if platform_name == "Musixmatch":
-                continue
-
-            default_platform_fields = DEFAULT_SETTINGS.get("credentials", {}).get(platform_name, {})
-            
-            if not default_platform_fields:                #
-                configured_platforms.append(platform_name)
-                continue
-
-            current_platform_creds = current_settings.get("credentials", {}).get(platform_name, {})
-            
-            is_fully_filled = True
-            for field_key in default_platform_fields.keys():
-                field_value = current_platform_creds.get(field_key, "")
-                if not str(field_value).strip():
-                    is_fully_filled = False
-                    break
-            
-            if is_fully_filled:
-                configured_platforms.append(platform_name)
-        
-        platforms = sorted(configured_platforms)
-
-        platform_var = tkinter.StringVar(value=platforms[0] if platforms else ""); platform_combo = customtkinter.CTkComboBox(controls_frame, values=platforms, variable=platform_var, width=140, state="readonly", height=30, dropdown_fg_color="#2B2B2B"); platform_combo.grid(row=0, column=1, padx=(5, 6)); platform_var.trace_add("write", on_platform_change)
+        search_tab_initial_platforms = [pk for pk in installed_platform_keys if pk != "Musixmatch"]
+        platform_var = tkinter.StringVar(value=search_tab_initial_platforms[0] if search_tab_initial_platforms else ""); 
+        platform_combo = customtkinter.CTkComboBox(controls_frame, values=search_tab_initial_platforms, variable=platform_var, width=140, state="readonly", height=30, dropdown_fg_color="#2B2B2B"); 
+        platform_combo.grid(row=0, column=1, padx=(5, 6)); 
+        platform_var.trace_add("write", on_platform_change)
         customtkinter.CTkLabel(controls_frame, text="Type").grid(row=0, column=2, padx=(5,5), sticky="w"); type_var = tkinter.StringVar(); type_combo = customtkinter.CTkComboBox(controls_frame, values=[], variable=type_var, width=100, state="readonly", height=30, dropdown_fg_color="#2B2B2B"); type_combo.grid(row=0, column=3, padx=(2, 1), sticky="w")
         search_input_frame = customtkinter.CTkFrame(controls_frame, fg_color="transparent"); search_input_frame.grid(row=0, column=4, sticky="ew", padx=(10, 5))
         search_entry = customtkinter.CTkEntry(search_input_frame, placeholder_text="Enter search query...", height=30, placeholder_text_color="#7F7F7F"); search_entry.pack(side="left", fill="x", expand=True, padx=(0, 0))
@@ -2454,6 +2761,7 @@ if __name__ == "__main__":
         global_settings_frame = customtkinter.CTkScrollableFrame(global_settings_tab)
         global_settings_frame.pack(expand=True, fill="both", padx=0, pady=(0, 5))
         global_settings_frame.grid_columnconfigure(1, weight=1)
+        global_settings_frame.grid_columnconfigure(0, uniform="settings_label_column")
         row = 0
         tooltip_texts = {
             "general.output_path": "The main folder where all downloads will be saved.",
@@ -2492,9 +2800,10 @@ if __name__ == "__main__":
             "playlist.paths_m3u": "Select 'relative' or 'absolute' paths in M3U file.",
             "playlist.extended_m3u": "Include extended info like track length in M3U file.",
             "advanced.advanced_login_system": "Enable advanced login system (Use only if instructed by module documentation).",
+            "advanced.codec_conversions": "Defines custom codec conversions (e.g., alac to flac). Enter source format on the left, target on the right.",
             "advanced.conversion_keep_original": "Keep the original file after successful codec conversion.",
             "advanced.cover_variance_threshold": "Tolerance for accepting covers with slightly different sizes (0-100).",
-            "advanced.debug_mode": "Allows various detailed informational and diagnostic messages to be printed to the console.\nIntended for troubleshooting issues only.",
+            "advanced.debug_mode": "Allows various detailed informational and diagnostic messages to be printed to the console.\\nIntended for troubleshooting issues only.",
             "advanced.disable_subscription_checks": "Prevents from checking if subscription for music service you are trying to download from is active.",
             "advanced.enable_undesirable_conversions": """Controls allowance to perform codec conversions that might result in quality loss or are not recommended.\nExamples:\nLossy-to-Lossy\nLossless-to-Lossy (if not preferred)\nUnnecessary Lossless-to-Lossless""",
             "advanced.ignore_existing_files": "Skips downloading files, if a file with the target name already exists in the output directory.",
@@ -2505,7 +2814,7 @@ if __name__ == "__main__":
                 customtkinter.CTkLabel(global_settings_frame, text=section_key.replace("_", " ").upper(), text_color="#898c8d", font=("Segoe UI", 11)).grid(row=row, column=0, columnspan=3, sticky="w", padx=(0, 10), pady=(10, 5)); row += 1
                 for field, default_value in section_value.items():
                     current_value = current_settings["globals"].get(section_key, {}).get(field, default_value); full_key = f"{section_key}.{field}"
-                    if full_key in ["advanced.codec_conversions", "advanced.conversion_flags"]:
+                    if full_key in ["advanced.conversion_flags"]:
                         continue
 
                     label_widget = customtkinter.CTkLabel(global_settings_frame, text=field.replace("_", " ").title())
@@ -2518,9 +2827,41 @@ if __name__ == "__main__":
                         widget = customtkinter.CTkCheckBox(global_settings_frame, text="", variable=var)
                         widget.grid(row=row, column=1, sticky="w", padx=5, pady=2)
                     elif isinstance(default_value, dict):
-                         widget = customtkinter.CTkLabel(global_settings_frame, text="(Complex Setting)")
-                         widget.grid(row=row, column=1, sticky="w", padx=5, pady=2)
-                         settings_vars["globals"][full_key] = {}
+                        if field == "codec_conversions":
+                            codec_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
+                            codec_frame.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
+                            codec_frame.grid_columnconfigure(2, weight=1)
+                            print(f"  - current_value (from settings.json via current_settings): {current_value}")
+                            print(f"  - default_value (from DEFAULT_SETTINGS): {default_value}")
+
+                            merged_conversions = default_value.copy() if isinstance(default_value, dict) else {}
+                            if isinstance(current_value, dict):
+                                merged_conversions.update(current_value)
+                            current_conversions = merged_conversions
+                            
+                            conversion_row = 0
+                            
+                            if current_conversions:
+                                for source_codec, target_codec in current_conversions.items():
+                                    source_var = tkinter.StringVar(value=str(source_codec).lower())
+                                    codec_options = ['flac', 'alac', 'wav', 'vorbis', 'mp3', 'aac']
+                                    source_dropdown = customtkinter.CTkComboBox(codec_frame, variable=source_var, values=codec_options, width=100, state="readonly", dropdown_fg_color="#2B2B2B")
+                                    source_dropdown.grid(row=conversion_row, column=0, sticky="w", padx=(0, 3), pady=1)
+                                    
+                                    arrow_label = customtkinter.CTkLabel(codec_frame, text="---->", width=40)
+                                    arrow_label.grid(row=conversion_row, column=1, sticky="w", padx=(0, 3), pady=1)
+                                    target_var = tkinter.StringVar(value=str(target_codec).lower())
+                                    target_dropdown = customtkinter.CTkComboBox(codec_frame, variable=target_var, values=codec_options, width=100, state="readonly", dropdown_fg_color="#2B2B2B")
+                                    target_dropdown.grid(row=conversion_row, column=2, sticky="w", padx=(0, 5), pady=1)
+                                    if full_key not in settings_vars["globals"]: settings_vars["globals"][full_key] = {}
+                                    settings_vars["globals"][full_key][f"{source_codec}_source"] = source_var
+                                    settings_vars["globals"][full_key][f"{source_codec}_target"] = target_var
+                                    
+                                    conversion_row += 1
+                        else:
+                            widget = customtkinter.CTkLabel(global_settings_frame, text="(Complex Setting)")
+                            widget.grid(row=row, column=1, sticky="w", padx=5, pady=2)
+                            settings_vars["globals"][full_key] = {}
                     else:
                          var = tkinter.StringVar(value=str(current_value)); settings_vars["globals"][full_key] = var
                          if section_key == "general" and field == "output_path":
@@ -2543,18 +2884,149 @@ if __name__ == "__main__":
                          elif section_key == "covers" and field == "main_compression":
                             compression_options = ["high", "low"]
                             if var.get() not in compression_options: var.set(compression_options[0])
-                            widget = customtkinter.CTkComboBox(global_settings_frame, variable=var, values=compression_options, state="readonly", dropdown_fg_color="#2B2B2B")
-                            widget.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
+                            
+                            radio_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
+                            radio_frame.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
+                            
+                            high_radio = customtkinter.CTkRadioButton(radio_frame, text="High", variable=var, value="high")
+                            high_radio.pack(side="left", padx=(0, 10))
+                            
+                            low_radio = customtkinter.CTkRadioButton(radio_frame, text="Low", variable=var, value="low")
+                            low_radio.pack(side="left")
+                            
+                            widget = radio_frame
                          elif section_key == "covers" and field == "external_format":
                             format_options = ["png", "jpg", "webp"]
                             if var.get() not in format_options: var.set(format_options[0])
-                            widget = customtkinter.CTkComboBox(global_settings_frame, variable=var, values=format_options, state="readonly", dropdown_fg_color="#2B2B2B")
-                            widget.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
+                            
+                            radio_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
+                            radio_frame.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
+                            
+                            png_radio = customtkinter.CTkRadioButton(radio_frame, text="PNG", variable=var, value="png")
+                            png_radio.pack(side="left", padx=(0, 10))
+                            
+                            jpg_radio = customtkinter.CTkRadioButton(radio_frame, text="JPG", variable=var, value="jpg")
+                            jpg_radio.pack(side="left", padx=(0, 10))
+                            
+                            webp_radio = customtkinter.CTkRadioButton(radio_frame, text="WebP", variable=var, value="webp")
+                            webp_radio.pack(side="left")
+                            
+                            widget = radio_frame
                          elif section_key == "covers" and field == "external_compression":
                             compression_options = ["low", "high"]
                             if var.get() not in compression_options: var.set(compression_options[0])
-                            widget = customtkinter.CTkComboBox(global_settings_frame, variable=var, values=compression_options, state="readonly", dropdown_fg_color="#2B2B2B")
-                            widget.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
+                            
+                            radio_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
+                            radio_frame.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
+                            
+                            low_radio = customtkinter.CTkRadioButton(radio_frame, text="Low", variable=var, value="low")
+                            low_radio.pack(side="left", padx=(0, 10))
+                            
+                            high_radio = customtkinter.CTkRadioButton(radio_frame, text="High", variable=var, value="high")
+                            high_radio.pack(side="left")
+                            
+                            widget = radio_frame
+                         elif section_key == "covers" and field == "main_resolution":
+                            try:
+                                current_res = int(var.get())
+                                if current_res < 100 or current_res > 1400:
+                                    current_res = 1400
+                            except (ValueError, TypeError):
+                                current_res = 1400
+                            
+                            current_res = round(current_res / 100) * 100
+                            
+                            slider_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
+                            slider_frame.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
+                            slider_frame.grid_columnconfigure(0, weight=1)
+                            
+                            value_label = customtkinter.CTkLabel(slider_frame, text=f"{current_res}px", width=60)
+                            value_label.grid(row=0, column=1, sticky="e")
+                            
+                            def update_resolution_value(value, var_ref=var, label_ref=value_label):
+                                int_value = round(value / 100) * 100
+                                var_ref.set(str(int_value))
+                                label_ref.configure(text=f"{int_value}px")
+                        
+                            slider = customtkinter.CTkSlider(slider_frame, from_=100, to=1400, number_of_steps=13, command=update_resolution_value)
+                            slider.set(current_res)
+                            slider.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+                            
+                            var.set(str(current_res))
+                            
+                            widget = slider_frame
+                         elif section_key == "covers" and field == "external_resolution":
+                            try:
+                                current_res = int(var.get())
+                                if current_res < 200 or current_res > 3000:
+                                    current_res = 3000
+                            except (ValueError, TypeError):
+                                current_res = 3000
+                            
+                            current_res = round(current_res / 200) * 200
+                            
+                            slider_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
+                            slider_frame.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
+                            slider_frame.grid_columnconfigure(0, weight=1)
+                            
+                            value_label = customtkinter.CTkLabel(slider_frame, text=f"{current_res}px", width=60)
+                            value_label.grid(row=0, column=1, sticky="e")
+                            
+                            def update_external_resolution_value(value, var_ref=var, label_ref=value_label):
+                                int_value = round(value / 200) * 200
+                                var_ref.set(str(int_value))
+                                label_ref.configure(text=f"{int_value}px")
+                            
+                            slider = customtkinter.CTkSlider(slider_frame, from_=200, to=3000, number_of_steps=14, command=update_external_resolution_value)
+                            slider.set(current_res)
+                            slider.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+                            
+                            var.set(str(current_res))
+                            
+                            widget = slider_frame
+                         elif section_key == "playlist" and field == "paths_m3u":
+                            paths_options = ["absolute", "relative"]
+                            if var.get() not in paths_options: var.set(paths_options[0])
+                            
+                            radio_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
+                            radio_frame.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
+                            
+                            absolute_radio = customtkinter.CTkRadioButton(radio_frame, text="Absolute", variable=var, value="absolute")
+                            absolute_radio.pack(side="left", padx=(0, 10))
+                            
+                            relative_radio = customtkinter.CTkRadioButton(radio_frame, text="Relative", variable=var, value="relative")
+                            relative_radio.pack(side="left")
+                            
+                            widget = radio_frame
+                         elif section_key == "advanced" and field == "cover_variance_threshold":
+                            try:
+                                current_threshold = int(var.get())
+                                if current_threshold < 0 or current_threshold > 100:
+                                    current_threshold = 0
+                            except (ValueError, TypeError):
+                                current_threshold = 0
+                            
+                            current_threshold = round(current_threshold / 2) * 2
+                            
+                            slider_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
+                            slider_frame.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
+                            slider_frame.grid_columnconfigure(0, weight=1)
+                            
+                            value_label = customtkinter.CTkLabel(slider_frame, text=f"{current_threshold}%", width=60)
+                            value_label.grid(row=0, column=1, sticky="e")
+                            
+                            def update_threshold_value(value, var_ref=var, label_ref=value_label):
+                                int_value = round(value / 2) * 2
+                                var_ref.set(str(int_value))
+                                label_ref.configure(text=f"{int_value}%")
+                            
+                            slider = customtkinter.CTkSlider(slider_frame, from_=0, to=100, number_of_steps=50, command=update_threshold_value)
+                            slider.set(current_threshold)
+                            slider.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+                            
+                            var.set(str(current_threshold))
+
+                            widget = slider_frame
                          else:
                             widget = customtkinter.CTkEntry(global_settings_frame, textvariable=var)
                             widget.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
@@ -2567,16 +3039,16 @@ if __name__ == "__main__":
                          CTkToolTip(widget, message=tooltip_text, bg_color="#1D1D1D")
 
                     row += 1
-        print("[Settings Tabs] Creating placeholder tabs based on DEFAULT_SETTINGS keys...")
-        credential_keys = list(DEFAULT_SETTINGS["credentials"].keys())
-        filtered_keys = [key for key in credential_keys if key != "Musixmatch"]
-        sorted_platform_keys = sorted(filtered_keys)
-        print(f"[Settings Tabs] Will display tabs for: {sorted_platform_keys}")
-        for platform_key in sorted_platform_keys:
+        print("[Settings Tabs] Creating placeholder tabs based on installed platform_keys...")        
+        credential_keys_for_settings_tabs = [pk for pk in installed_platform_keys if pk != "Musixmatch"]        
+        
+        sorted_platform_keys_for_tabs = sorted(credential_keys_for_settings_tabs)
+        print(f"[Settings Tabs] Will display tabs for: {sorted_platform_keys_for_tabs}")
+        for platform_key in sorted_platform_keys_for_tabs:
             platform_tab_frame = settings_tabview.add(platform_key)
             credential_tab_frames[platform_key] = platform_tab_frame
         save_controls_frame = customtkinter.CTkFrame(settings_tab, fg_color="transparent"); save_controls_frame.pack(side="bottom", anchor="se", padx=10, pady=(0, 10))
-        save_status_var = tkinter.StringVar(); save_status_label = customtkinter.CTkLabel(save_controls_frame, textvariable=save_status_var, text_color=("green", "lightgreen")); save_status_label.pack(side="left", padx=(0, 10))
+        save_status_var = tkinter.StringVar(); save_status_label = customtkinter.CTkLabel(save_controls_frame, textvariable=save_status_var, text_color=("#00C851", "#00C851")); save_status_label.pack(side="left", padx=(0, 10))
         save_button = customtkinter.CTkButton(save_controls_frame, text="Save", width=100, height=30, command=handle_save_settings, fg_color="#343638", hover_color="#1F6AA5"); save_button.pack(side="left", padx=5, pady=(0, 0))
         about_tab = tabview.add("About"); about_container = customtkinter.CTkFrame(about_tab, fg_color="transparent"); about_container.pack(fill="both", expand=True, padx=16, pady=(0, 0)); canvas = customtkinter.CTkFrame(about_container, fg_color="transparent"); canvas.pack(fill="both", expand=True); about_frame = customtkinter.CTkFrame(canvas, fg_color="transparent"); about_frame.pack(fill="x", expand=False, pady=10)
         icon_title_frame = customtkinter.CTkFrame(about_frame, fg_color="transparent")
@@ -2658,8 +3130,7 @@ if __name__ == "__main__":
             ("Beatport", "https://github.com/bascurtiz/orpheusdl-beatport"),
             ("Beatsource", "https://github.com/bascurtiz/orpheusdl-beatsource"),
             ("Bugs", "https://github.com/Dniel97/orpheusdl-bugsmusic"),
-            ("Deezer (acc)", "https://github.com/uhwot/orpheusdl-deezer"),
-            ("Deezer (arl)", "https://github.com/thekvt/orpheusdl-deezer"),
+            ("Deezer", "https://github.com/uhwot/orpheusdl-deezer"),            
             ("Genius", "https://github.com/Dniel97/orpheusdl-genius"),
             ("Idagio", "https://github.com/Dniel97/orpheusdl-idagio"),
             ("JioSaavn", "https://github.com/bunnykek/orpheusdl-jiosaavn"),
@@ -2667,8 +3138,7 @@ if __name__ == "__main__":
             ("Musixmatch", "https://github.com/yarrm80s/orpheusdl-musixmatch"),
             ("Napster", "https://github.com/yarrm80s/orpheusdl-napster"),
             ("Nugs.net", "https://github.com/Dniel97/orpheusdl-nugs"),
-            ("Qobuz (acc)", "https://github.com/yarrm80s/orpheusdl-qobuz"),
-            ("Qobuz (id/tok)", "https://github.com/thekvt/orpheusdl-qobuz"),
+            ("Qobuz", "https://github.com/bascurtiz/orpheusdl-qobuz"),            
             ("SoundCloud", "https://github.com/bascurtiz/orpheusdl-soundcloud"),
             ("Spotify", "https://github.com/bascurtiz/orpheusdl-spotify"),
             ("Tidal", "https://github.com/Dniel97/orpheusdl-tidal")
@@ -2715,14 +3185,12 @@ if __name__ == "__main__":
                 _update_settings_tab_widgets()
                 if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
                     print("[DEBUG] _initial_ui_update finished.")
-
             except Exception as e_init_update:
                  print(f"[Error] in _initial_ui_update: {e_init_update}")
 
         _initial_ui_update()
-
+        app.protocol("WM_DELETE_WINDOW", _on_gui_exit)
         app.mainloop()
-
     else:
         print(f"[Child Process {os.getpid()}] Detected, exiting.")
         sys.exit()
