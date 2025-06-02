@@ -51,7 +51,6 @@ a = Analysis(
         'pbkdf2',
         'srp',
         'pytz',
-        'spotipy',
         'librespot',
         'pkce'
     ],
