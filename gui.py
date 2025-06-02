@@ -1289,6 +1289,18 @@ class QueueWriter(io.TextIOBase):
 
     def write(self, msg):
         msg_strip = msg.lstrip()
+        beatsource_patterns = [
+            r"^Attempting login via https://api\.beatsource\.com/v4/auth/login/",
+            r"^Login successful, obtained session ID\.",
+            r"^Attempting authorization via https://api\.beatsource\.com/v4/auth/o/authorize/",
+            r"^Authorization successful, obtained code\.",
+            r"^Exchanging code for token via https://api\.beatsource\.com/v4/auth/o/token/",
+            r"^Token exchange successful\."
+        ]
+        for pattern in beatsource_patterns:
+            if re.search(pattern, msg_strip):
+                return len(msg)
+
         if "[JioSaavn Warning] Accessing song data using the first key as fallback." in msg_strip:
             return len(msg)
         if "AttributeError: 'OrpheusOptions' object has no attribute 'global_settings'" in msg_strip:
