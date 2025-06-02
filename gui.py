@@ -28,6 +28,8 @@ import traceback
 import logging
 import webbrowser
 
+_SCRIPT_DIR = None
+
 def _simple_slugify(text):
     if not text: return None
     text = str(text).lower()
@@ -79,6 +81,10 @@ class QueueLogHandler(logging.Handler):
             return
         if record.levelno == logging.INFO and ':' in record.name:
             return        
+        if record.name == 'modules.spotify.spotify_api' and \
+           record.levelname == 'ERROR' and \
+           msg_content.startswith("GLOBAL_PATCH_DEBUG: Unexpected generic exception during Librespot session creation: [Errno 61] Connection refused"):
+            return
         
         cleaned_msg = self.format(record)
         cleaned_msg = re.sub(r' - \w+ - ', ' - ', cleaned_msg)
@@ -140,12 +146,18 @@ if platform.system() == "Windows":
 def get_script_directory():
     """Gets the directory containing the script/executable, handling bundled apps."""
     if getattr(sys, 'frozen', False):
-        application_path = os.path.dirname(sys.executable)
+        abs_executable_path = os.path.abspath(sys.executable)
+        
         if platform.system() == "Darwin":
-            bundle_dir = os.path.abspath(os.path.join(application_path, '..', '..', '..'))
-            return bundle_dir
+            if ".app/Contents/MacOS" in abs_executable_path:
+                dir_of_executable = os.path.dirname(abs_executable_path)
+                app_bundle_contents_dir = os.path.dirname(dir_of_executable)
+                app_bundle_itself_path = os.path.dirname(app_bundle_contents_dir)
+                return os.path.dirname(app_bundle_itself_path)
+            else:
+                return os.path.dirname(abs_executable_path)
         else:
-            return application_path
+            return os.path.dirname(abs_executable_path)
     else:
         try:
             script_path = os.path.dirname(os.path.abspath(__file__))
@@ -408,15 +420,71 @@ def load_settings():
 
 def initialize_orpheus():
     """Attempts to initialize the global Orpheus instance."""
-    global orpheus_instance, app, download_button, search_button, DATA_DIR
+    global orpheus_instance, app, download_button, search_button, DATA_DIR, _SCRIPT_DIR
 
     if not ORPHEUS_AVAILABLE:
         print("Orpheus library not available. Skipping initialization.")
+        try:
+            if 'app' in globals() and app and app.winfo_exists():
+                app.after(100, lambda: show_centered_messagebox("Initialization Error", "Orpheus library components are missing or failed to load. Core features will be disabled.", dialog_type="error"))
+            if 'download_button' in globals() and download_button and download_button.winfo_exists(): download_button.configure(state="disabled")
+            if 'search_button' in globals() and search_button and search_button.winfo_exists(): search_button.configure(state="disabled")
+        except Exception as gui_e: print(f"Error showing Orpheus unavailable message in GUI: {gui_e}")
         return False
+
+    if _SCRIPT_DIR is None:
+        error_message = "FATAL ERROR: _SCRIPT_DIR (application base path) is not set. Cannot reliably initialize Orpheus. The application may be in an inconsistent state or not launched correctly."
+        print(error_message)
+        try:
+            if 'app' in globals() and app and app.winfo_exists():
+                app.after(100, lambda: show_centered_messagebox("Critical Application Error", error_message, dialog_type="error"))
+        except Exception as gui_e: print(f"Error showing critical _SCRIPT_DIR error in GUI: {gui_e}")
+        return False
+    elif not os.path.isdir(_SCRIPT_DIR):
+        error_message = f"FATAL ERROR: _SCRIPT_DIR '{_SCRIPT_DIR}' is not a valid directory. Cannot initialize Orpheus."
+        print(error_message)
+        try:
+            if 'app' in globals() and app and app.winfo_exists():
+                app.after(100, lambda: show_centered_messagebox("Critical Application Error", error_message, dialog_type="error"))
+        except Exception as gui_e: print(f"Error showing critical _SCRIPT_DIR directory error in GUI: {gui_e}")
+        return False
+    original_cwd = os.getcwd()
+    normalized_original_cwd = os.path.normpath(original_cwd)
+    normalized_script_dir = os.path.normpath(_SCRIPT_DIR)
+
+    if normalized_original_cwd != normalized_script_dir:
+        print(f"[Initialize Orpheus] Current CWD is '{original_cwd}'. Target application directory (_SCRIPT_DIR) is '{_SCRIPT_DIR}'. Attempting to change CWD.")
+        try:
+            os.chdir(_SCRIPT_DIR)
+            new_cwd = os.getcwd()
+            print(f"[Initialize Orpheus] CWD successfully changed to '{new_cwd}'.")
+            if os.path.normpath(new_cwd) != normalized_script_dir:
+                print(f"[Initialize Orpheus] WARNING: CWD changed to '{new_cwd}', but it does not match the normalized _SCRIPT_DIR '{normalized_script_dir}'. This might indicate issues.")
+        except Exception as e_chdir:
+            error_detail = f"Type: {type(e_chdir).__name__}, Message: {e_chdir}"
+            tb_str_chdir = traceback.format_exc()
+            error_message_chdir = f"CRITICAL ERROR: Failed to change CWD to application directory '{_SCRIPT_DIR}' needed for Orpheus initialization.\nError: {error_detail}\nFull Traceback:\n{tb_str_chdir}\nOrpheus will likely fail to initialize or function correctly."
+            print(error_message_chdir)
+            try:
+                if 'app' in globals() and app and app.winfo_exists():
+                    user_error_msg = f"A critical error occurred while setting up the application's working directory: {e_chdir}. The application might not work correctly. Please check logs or try restarting."
+                    app.after(100, lambda: show_centered_messagebox("Critical Setup Error", user_error_msg, dialog_type="error"))
+            except Exception as gui_e: print(f"Error showing CWD change critical error in GUI: {gui_e}")
+            return False
+    global current_settings
+    ffmpeg_path_setting = current_settings.get("globals", {}).get("advanced", {}).get("ffmpeg_path", "ffmpeg").strip()
+    if ffmpeg_path_setting and ffmpeg_path_setting.lower() != "ffmpeg":
+        if os.path.isfile(ffmpeg_path_setting):
+            ffmpeg_dir = os.path.dirname(ffmpeg_path_setting)
+            if ffmpeg_dir:
+                current_path = os.environ.get("PATH", "")
+                if ffmpeg_dir not in current_path.split(os.pathsep):
+                    os.environ["PATH"] = ffmpeg_dir + os.pathsep + current_path
+
     if orpheus_instance is None:
         try:
             if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-                print("Initializing global Orpheus instance...")
+                print(f"Initializing global Orpheus instance (CWD: {os.getcwd()})...")
             orpheus_instance = Orpheus()
             if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
                 print("Global Orpheus instance initialized successfully.")
@@ -424,18 +492,18 @@ def initialize_orpheus():
         except Exception as e:
             import traceback
             tb_str = traceback.format_exc()
-            error_message = f"FATAL: Failed to initialize Orpheus library: {e}\\nTraceback:\\n{tb_str}"
-
-            print(error_message)
+            error_message_init = f"FATAL: Failed to initialize Orpheus library (CWD: {os.getcwd()}).\nError Type: {type(e).__name__}\nError: {e}\nTraceback:\n{tb_str}"
+            print(error_message_init)
             try:
                 if 'app' in globals() and app and app.winfo_exists():
-                    app.after(100, lambda: show_centered_messagebox("Initialization Error", error_message, dialog_type="error"))
+                    user_error_msg_init = f"Failed to start the Orpheus download engine: {e}. Please check your settings and ensure all components are correctly placed. If the problem persists, check the console output for more details."
+                    app.after(100, lambda: show_centered_messagebox("Initialization Error", user_error_msg_init, dialog_type="error"))
                 if 'download_button' in globals() and download_button and download_button.winfo_exists():
                     download_button.configure(state="disabled")
                 if 'search_button' in globals() and search_button and search_button.winfo_exists():
                     search_button.configure(state="disabled")
             except NameError: pass
-            except Exception as gui_e: print(f"Error showing init error in GUI: {gui_e}")
+            except Exception as gui_e: print(f"Error showing Orpheus init error in GUI: {gui_e}")
             return False
     return True
 
@@ -465,7 +533,69 @@ def save_settings(show_confirmation: bool = True):
         return False
     updated_gui_settings = {"globals": {}, "credentials": {}}
     parse_errors = []
+    collected_conversion_flags = {}
+    aac_var_key = "advanced.conversion_flags.aac.audio_bitrate"
+    aac_var = settings_vars.get("globals", {}).get(aac_var_key)
+    if isinstance(aac_var, tkinter.StringVar):
+        collected_conversion_flags["aac"] = {"audio_bitrate": aac_var.get()}
+    else:
+        parse_errors.append(f"AAC bitrate var not found or invalid type for key '{aac_var_key}'. Using default.")
+        collected_conversion_flags["aac"] = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["aac"].copy()
+    flac_var_key = "advanced.conversion_flags.flac.compression_level"
+    flac_var = settings_vars.get("globals", {}).get(flac_var_key)
+    if isinstance(flac_var, tkinter.StringVar):
+        try:
+            collected_conversion_flags["flac"] = {"compression_level": int(flac_var.get())}
+        except ValueError:
+            parse_errors.append(f"Invalid integer for FLAC compression from var '{flac_var_key}': '{flac_var.get()}'. Using default.")
+            collected_conversion_flags["flac"] = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["flac"].copy()
+    else:
+        parse_errors.append(f"FLAC compression var not found or invalid type for key '{flac_var_key}'. Using default.")
+        collected_conversion_flags["flac"] = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["flac"].copy()
+    mp3_var_key = "advanced.conversion_flags.mp3.setting"
+    mp3_var = settings_vars.get("globals", {}).get(mp3_var_key)
+    if isinstance(mp3_var, tkinter.StringVar):
+        raw_selected_mp3_option = mp3_var.get()
+        selected_mp3_option = raw_selected_mp3_option.strip()
+        is_debug = current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False)
+
+        if is_debug:
+            print(f"[Save Settings MP3 DEBUG] Raw value from StringVar: '{raw_selected_mp3_option}' (len {len(raw_selected_mp3_option)}), repr: {repr(raw_selected_mp3_option)}")
+            print(f"[Save Settings MP3 DEBUG] Stripped value: '{selected_mp3_option}' (len {len(selected_mp3_option)}), repr: {repr(selected_mp3_option)}")
+            print(f"[Save Settings MP3 DEBUG] Comparing stripped '{selected_mp3_option}' with 'MP3 VBR (Max Quality)': {selected_mp3_option == 'MP3 VBR (Max Quality)'}")
+        if selected_mp3_option == "MP3 VBR (Max Quality)":
+            if is_debug:
+                print(f"[Save Settings - MP3 WORKAROUND ACTIVE] Normalizing '{raw_selected_mp3_option}' (stripped to '{selected_mp3_option}') to 'VBR -V0' before processing.")
+            selected_mp3_option = "VBR -V0"
+        elif is_debug and selected_mp3_option != "VBR -V0" and not selected_mp3_option.endswith("k"):
+             print(f"[Save Settings MP3 DEBUG] Workaround condition was FALSE for stripped value '{selected_mp3_option}'. It is not 'MP3 VBR (Max Quality)'. Proceeding to check standard valid options.")
+
+        if selected_mp3_option == "VBR -V0":
+            if is_debug: print(f"[Save Settings MP3 DEBUG] Condition 'VBR -V0' met for '{selected_mp3_option}'. Setting qscale:a.")
+            collected_conversion_flags["mp3"] = {"qscale:a": "0"}
+        elif selected_mp3_option.endswith("k"):
+            if is_debug: print(f"[Save Settings MP3 DEBUG] Condition '.endswith(\"k\")' met for '{selected_mp3_option}'. Setting audio_bitrate.")
+            collected_conversion_flags["mp3"] = {"audio_bitrate": selected_mp3_option}
+        else:
+            if is_debug: print(f"[Save Settings MP3 DEBUG] All standard conditions failed for stripped value '{selected_mp3_option}'. Appending parse error for raw value '{raw_selected_mp3_option}'.")
+            parse_errors.append(f"Invalid MP3 setting selected from var '{mp3_var_key}': '{raw_selected_mp3_option}'. Using default.")
+            collected_conversion_flags["mp3"] = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["mp3"].copy()
+    else:
+        parse_errors.append(f"MP3 setting var not found or invalid type for key '{mp3_var_key}'. Using default.")
+        collected_conversion_flags["mp3"] = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["mp3"].copy()
+    if "globals" not in updated_gui_settings: updated_gui_settings["globals"] = {}
+    if "advanced" not in updated_gui_settings["globals"]: updated_gui_settings["globals"]["advanced"] = {}
+    updated_gui_settings["globals"]["advanced"]["conversion_flags"] = collected_conversion_flags
+    slider_handled_conversion_flag_keys = [
+        "advanced.conversion_flags.aac.audio_bitrate",
+        "advanced.conversion_flags.flac.compression_level",
+        "advanced.conversion_flags.mp3.setting"
+    ]
+
     for key_path_str, var in settings_vars.get("globals", {}).items():
+        if key_path_str in slider_handled_conversion_flag_keys:
+            continue
+
         if key_path_str == "advanced.codec_conversions":
             print(f"[Save Settings DEBUG - Codec Processing] '{key_path_str}'. Var type: {type(var)}")
             if isinstance(var, dict):
@@ -515,6 +645,7 @@ def save_settings(show_confirmation: bool = True):
             else:
                 print(f"[Save Settings WARN] 'advanced.codec_conversions' var is not a dict as expected. Type: {type(var)}. Skipping save logic for it.")
             continue
+        
         if not isinstance(var, tkinter.Variable):
             print(f"[Save Settings WARN] Skipping non-Variable or unhandled dict: {key_path_str} of type {type(var)} during general processing.")
             continue
@@ -567,27 +698,60 @@ def save_settings(show_confirmation: bool = True):
         if "general" not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"]["general"] = {}
         for gui_key, orpheus_key in general_map_gui_to_orpheus.items():
             if gui_key in gui_general_section: mapped_orpheus_updates["global"]["general"][orpheus_key] = gui_general_section[gui_key]
+    if "globals" in updated_gui_settings and \
+       "advanced" in updated_gui_settings["globals"] and \
+       "conversion_flags" in updated_gui_settings["globals"]["advanced"]:
+        if "global" not in mapped_orpheus_updates: mapped_orpheus_updates["global"] = {}
+        if "advanced" not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"]["advanced"] = {}
+        
+        mapped_orpheus_updates["global"]["advanced"]["conversion_flags"] = \
+            copy.deepcopy(updated_gui_settings["globals"]["advanced"]["conversion_flags"])
+        if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+            print(f"[DEBUG SAVE Settings] Explicitly deep-copied conversion_flags to mapped_orpheus_updates.")
+
     for section_key, section_data in gui_globals.items():
          if section_key != "general" and section_key in mapped_orpheus_updates["global"]:
              if isinstance(section_data, dict) and isinstance(mapped_orpheus_updates["global"].get(section_key), dict):
                   if section_key not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"][section_key] = {}
-                  for item_key, item_value in section_data.items(): mapped_orpheus_updates["global"][section_key][item_key] = item_value
+                  for item_key, item_value in section_data.items():
+                      if section_key == "advanced" and item_key == "conversion_flags":
+                          continue
+                      mapped_orpheus_updates["global"][section_key][item_key] = item_value
     platform_map_to_orpheus = { "BugsMusic": "bugs", "Nugs": "nugs", "SoundCloud": "soundcloud", "Tidal": "tidal", "Qobuz": "qobuz", "Deezer": "deezer", "Idagio": "idagio", "KKBOX": "kkbox", "Napster": "napster", "Beatport": "beatport", "Beatsource": "beatsource", "Musixmatch": "musixmatch", "Spotify": "spotify" }
     for gui_platform, creds in updated_gui_settings.get("credentials", {}).items():
         orpheus_platform = platform_map_to_orpheus.get(gui_platform)
         if orpheus_platform:
             if orpheus_platform not in mapped_orpheus_updates["modules"]: mapped_orpheus_updates["modules"][orpheus_platform] = {}
             mapped_orpheus_updates["modules"][orpheus_platform] = creds.copy()
+    if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+        debug_conversion_flags_before_merge = mapped_orpheus_updates.get("global", {}).get("advanced", {}).get("conversion_flags", "NOT_FOUND_IN_MAPPED_ORPHEUS_UPDATES")
+        print(f"[DEBUG SAVE Settings] `mapped_orpheus_updates[global][advanced][conversion_flags]` (before merge): {debug_conversion_flags_before_merge}")
+
     print("[Save Settings] Merging validated UI changes into existing settings structure...")
-    final_settings_to_save = deep_merge(existing_settings, mapped_orpheus_updates, keys_to_overwrite_if_dicts=["codec_conversions"])
+    final_settings_to_save = deep_merge(existing_settings, mapped_orpheus_updates, keys_to_overwrite_if_dicts=["codec_conversions", "conversion_flags"])
     try:
         print(f"[Save Settings] Attempting to write merged settings to {CONFIG_FILE_PATH}")
         config_dir = os.path.dirname(CONFIG_FILE_PATH)
         if not os.path.exists(config_dir): os.makedirs(config_dir); print(f"[Save Settings] Created config directory: {config_dir}")
         with open(CONFIG_FILE_PATH, 'w', encoding='utf-8') as f: json.dump(final_settings_to_save, f, indent=4, ensure_ascii=False, sort_keys=True)
         print(f"[Save Settings] Settings successfully written to {CONFIG_FILE_PATH}.")
+
         print("[Save Settings] Updating in-memory 'current_settings' from GUI values...")
-        deep_merge(current_settings, updated_gui_settings, keys_to_overwrite_if_dicts=["codec_conversions"])
+        deep_merge(current_settings, updated_gui_settings, keys_to_overwrite_if_dicts=["codec_conversions", "conversion_flags"])
+        if "globals" in updated_gui_settings and "advanced" in updated_gui_settings["globals"] and "conversion_flags" in updated_gui_settings["globals"]["advanced"]:
+            clean_conversion_flags_from_ui = updated_gui_settings["globals"]["advanced"]["conversion_flags"]
+            if "globals" not in current_settings: current_settings["globals"] = {}
+            if "advanced" not in current_settings["globals"]: current_settings["globals"]["advanced"] = {}
+            if "conversion_flags" not in current_settings["globals"]["advanced"]: current_settings["globals"]["advanced"]["conversion_flags"] = {}
+            if "aac" in clean_conversion_flags_from_ui:
+                current_settings["globals"]["advanced"]["conversion_flags"]["aac"] = clean_conversion_flags_from_ui["aac"].copy()
+            if "flac" in clean_conversion_flags_from_ui:
+                current_settings["globals"]["advanced"]["conversion_flags"]["flac"] = clean_conversion_flags_from_ui["flac"].copy()
+            if "mp3" in clean_conversion_flags_from_ui:
+                current_settings["globals"]["advanced"]["conversion_flags"]["mp3"] = clean_conversion_flags_from_ui["mp3"].copy()
+        
+        print(f"[DEBUG SAVE] current_settings MP3 flags after explicit overwrite: {current_settings.get('globals', {}).get('advanced', {}).get('conversion_flags', {}).get('mp3')}")
+
         print("[Save Settings] In-memory 'current_settings' updated.")
         print("[Save Settings] Re-initializing Orpheus instance with updated settings...")
         orpheus_instance = None
@@ -1214,6 +1378,19 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             },
             **{k: v for k, v in gui_settings.get("globals", {}).items() if k != "general"}
         }
+        if "advanced" in downloader_settings and \
+           "conversion_flags" in downloader_settings["advanced"] and \
+           "mp3" in downloader_settings["advanced"]["conversion_flags"]:
+            mp3_flags = downloader_settings["advanced"]["conversion_flags"]["mp3"]
+            if "audio_bitrate" in mp3_flags and "qscale:a" in mp3_flags:
+                if gui_settings.get("globals",{}).get("advanced",{}).get("conversion_flags",{}).get("mp3",{}).get("audio_bitrate"):
+                    cleaned_mp3_flags = {"audio_bitrate": gui_settings["globals"]["advanced"]["conversion_flags"]["mp3"]["audio_bitrate"]}
+                    downloader_settings["advanced"]["conversion_flags"]["mp3"] = cleaned_mp3_flags
+                    print(f"[RunThread DEBUG] Cleaned MP3 flags to: {cleaned_mp3_flags}")
+                elif gui_settings.get("globals",{}).get("advanced",{}).get("conversion_flags",{}).get("mp3",{}).get("qscale:a"):
+                    cleaned_mp3_flags = {"qscale:a": gui_settings["globals"]["advanced"]["conversion_flags"]["mp3"]["qscale:a"]}
+                    downloader_settings["advanced"]["conversion_flags"]["mp3"] = cleaned_mp3_flags
+
         module_controls_dict = orpheus.module_controls
         oprinter = Oprinter()
         downloader = Downloader(settings=downloader_settings, module_controls=module_controls_dict, oprinter=oprinter, path=output_path)
@@ -1328,7 +1505,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                     else: oprinter.oprint(f"[Warning] Failed to resolve SoundCloud URL or ID mismatch for {media_id}. Proceeding without pre-fetched data."); data_dict = {}
                 except Exception as e: oprinter.oprint(f"[Error] Resolving SoundCloud URL failed: {e}"); data_dict = {}
             playlist_info = None
-            if gui_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
                 print(f"[GUI DEBUG] Calling get_playlist_info with playlist_id = '{media_id}'" + (f", is_chart=True" if is_beatport_chart else ""))
             try:
                 if downloader.service_name == 'soundcloud':
@@ -2163,7 +2340,7 @@ def _update_settings_tab_widgets():
         print("Refreshing Global Settings tab UI from current_settings...")
     try:
         for key, var in settings_vars.get("globals", {}).items():
-            if key in ["advanced.conversion_flags"]:
+            if key in ["advanced.codec_conversions"]:
                 continue
 
             if key == "advanced.codec_conversions":
@@ -2210,6 +2387,98 @@ def _update_settings_tab_widgets():
                     else: print(f"Error setting variable for {key}: {e_set}")
                 except Exception as e_set_other:
                     print(f"Error setting variable for {key}: {e_set_other}")
+        if 'path_var_main' in globals() and isinstance(path_var_main, tkinter.Variable) and "general.output_path" not in settings_vars.get("globals", {}):
+             main_path_val = current_settings.get("globals", {}).get("general", {}).get("output_path")
+             if main_path_val is not None:
+                  try: path_var_main.set(main_path_val)
+                  except tkinter.TclError as e_set_main:
+                      if "invalid command name" in str(e_set_main): pass
+                      else: print(f"Error setting main path variable: {e_set_main}")
+                  except Exception as e_set_main_other:
+                      print(f"Error setting main path variable: {e_set_main_other}")
+        if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+            print("Global Settings tab UI refresh finished.")
+    except Exception as e: print(f"Error during Global settings UI refresh: {e}"); import traceback; traceback.print_exc()
+
+    try:
+        for key, var in settings_vars.get("globals", {}).items():
+
+            if key == "advanced.codec_conversions":
+                current_codec_conversions_setting = current_settings.get("globals", {}).get("advanced", {}).get("codec_conversions", {})
+                
+                if isinstance(var, dict) and isinstance(current_codec_conversions_setting, dict):
+                    for source_codec_from_settings, target_codec_from_settings in current_codec_conversions_setting.items():
+                        source_var_key = f"{source_codec_from_settings}_source"
+                        target_var_key = f"{source_codec_from_settings}_target"
+
+                        if source_var_key in var and isinstance(var[source_var_key], tkinter.StringVar):
+                            try: var[source_var_key].set(source_codec_from_settings)
+                            except Exception as e_set_src: print(f"Error setting source var {source_var_key}: {e_set_src}")
+
+                        if target_var_key in var and isinstance(var[target_var_key], tkinter.StringVar):
+                            try: var[target_var_key].set(target_codec_from_settings)
+                            except Exception as e_set_tgt: print(f"Error setting target var {target_var_key}: {e_set_tgt}")
+                continue
+            if not isinstance(var, tkinter.Variable):
+                 if isinstance(var, dict):
+                     if not var:
+                         pass 
+                 else:
+                    print(f"[Update Settings UI WARN] Skipping key '{key}' in settings_vars: value is type {type(var)}, not a tkinter.Variable or handled dict.")
+            keys = key.split('.')
+            temp_dict = current_settings.get("globals", {})
+            valid_path = True
+            for k_part in keys:
+                if isinstance(temp_dict, dict):
+                    temp_dict = temp_dict.get(k_part)
+                else:
+                    valid_path = False
+                    break
+            value_from_dict = temp_dict if valid_path else None
+            
+            if value_from_dict is not None:
+                try:
+                    if isinstance(var, tkinter.BooleanVar):
+                        var.set(bool(value_from_dict))
+                    else:
+                        var.set(str(value_from_dict))
+                except tkinter.TclError as e_set:
+                    if "invalid command name" in str(e_set): pass
+                    else: print(f"Error setting variable for {key}: {e_set}")
+                except Exception as e_set_other:
+                    print(f"Error setting variable for {key}: {e_set_other}")
+        aac_br_var = settings_vars.get("globals", {}).get("advanced.conversion_flags.aac.audio_bitrate")
+        if aac_br_var and isinstance(aac_br_var, tkinter.StringVar):
+            aac_default_val = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["aac"]["audio_bitrate"]
+            aac_current_br_from_settings = str(current_settings.get("globals", {}).get("advanced", {}).get("conversion_flags", {}).get("aac", {}).get("audio_bitrate", aac_default_val))
+            aac_br_var.set(aac_current_br_from_settings)
+        flac_cl_var = settings_vars.get("globals", {}).get("advanced.conversion_flags.flac.compression_level")
+        if flac_cl_var and isinstance(flac_cl_var, tkinter.StringVar):
+            flac_default_val = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["flac"]["compression_level"]
+            flac_current_cl_from_settings = str(current_settings.get("globals", {}).get("advanced", {}).get("conversion_flags", {}).get("flac", {}).get("compression_level", flac_default_val))
+            flac_cl_var.set(flac_current_cl_from_settings)
+        mp3_setting_var = settings_vars.get("globals", {}).get("advanced.conversion_flags.mp3.setting")
+        if mp3_setting_var and isinstance(mp3_setting_var, tkinter.StringVar):
+            mp3_conf_flags_loaded = current_settings.get("globals", {}).get("advanced", {}).get("conversion_flags", {}).get("mp3", {})
+            mp3_default_conf_flags_loaded = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["mp3"]
+            
+            resolved_display_val = None
+            if isinstance(mp3_conf_flags_loaded, dict):
+                if "audio_bitrate" in mp3_conf_flags_loaded and isinstance(mp3_conf_flags_loaded["audio_bitrate"], str) and mp3_conf_flags_loaded["audio_bitrate"].endswith('k'):
+                    resolved_display_val = mp3_conf_flags_loaded["audio_bitrate"]
+                elif "qscale:a" in mp3_conf_flags_loaded and mp3_conf_flags_loaded["qscale:a"] == "0":
+                    resolved_display_val = "VBR -V0"
+            if resolved_display_val is None:
+                if "audio_bitrate" in mp3_default_conf_flags_loaded and isinstance(mp3_default_conf_flags_loaded["audio_bitrate"], str) and mp3_default_conf_flags_loaded["audio_bitrate"].endswith('k'):
+                    resolved_display_val = mp3_default_conf_flags_loaded["audio_bitrate"]
+                elif "qscale:a" in mp3_default_conf_flags_loaded and mp3_default_conf_flags_loaded["qscale:a"] == "0":
+                    resolved_display_val = "VBR -V0"
+            valid_mp3_ui_options = ["128k", "192k", "256k", "320k", "VBR -V0"]
+            if resolved_display_val is None or resolved_display_val not in valid_mp3_ui_options:
+                resolved_display_val = "VBR -V0"
+
+            mp3_setting_var.set(resolved_display_val)
+
         if 'path_var_main' in globals() and isinstance(path_var_main, tkinter.Variable) and "general.output_path" not in settings_vars.get("globals", {}):
              main_path_val = current_settings.get("globals", {}).get("general", {}).get("output_path")
              if main_path_val is not None:
@@ -2413,6 +2682,19 @@ def _on_gui_exit():
         app.destroy()
     print("[Exit] Application shutdown complete.")
 
+def browse_ffmpeg_path(path_variable):
+    filetypes = [("All files", "*.*")]
+    if platform.system() == "Windows":
+        filetypes.insert(0, ("Executable files", "*.exe"))
+
+    filepath = tkinter.filedialog.askopenfilename(
+        initialdir=os.path.dirname(path_variable.get()) if path_variable.get() and path_variable.get() != "ffmpeg" else os.path.expanduser("~"),
+        filetypes=filetypes,
+        title="Select FFmpeg Executable"
+    )
+    if filepath:
+        path_variable.set(filepath)
+
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     _mutex_handle = None
@@ -2449,12 +2731,27 @@ if __name__ == "__main__":
         print(f"[Main Process {os.getpid()}] Starting application...")
         _SCRIPT_DIR = get_script_directory()
         try:
-            os.makedirs('temp', exist_ok=True)
+            os.makedirs(os.path.join(_SCRIPT_DIR if _SCRIPT_DIR and os.path.isdir(_SCRIPT_DIR) else os.getcwd(), 'temp'), exist_ok=True)
             print("[Init] Ensured temp directory exists.")
-            os.chdir(_SCRIPT_DIR)
-            print(f"[CWD] Changed working directory to: {_SCRIPT_DIR}")
+            if _SCRIPT_DIR and os.path.isdir(_SCRIPT_DIR):
+                os.chdir(_SCRIPT_DIR)
+                print(f"[CWD] Changed working directory to: {_SCRIPT_DIR}")
+            elif _SCRIPT_DIR:
+                print(f"[CWD] FATAL: _SCRIPT_DIR \'{_SCRIPT_DIR}\' is not a valid directory. Application might fail.")
+                if 'show_centered_messagebox' in globals() and callable(show_centered_messagebox):
+                    show_centered_messagebox("Critical Path Error", f"Application base directory \'{_SCRIPT_DIR}\' is invalid. Cannot continue.", dialog_type="error")
+                else:
+                    tkinter.messagebox.showerror("Critical Path Error", f"Application base directory \'{_SCRIPT_DIR}\' is invalid. Cannot continue.")
+                sys.exit(1)
+            else:
+                print(f"[CWD] FATAL: _SCRIPT_DIR could not be determined. Application will likely fail.")
+                if 'show_centered_messagebox' in globals() and callable(show_centered_messagebox):
+                    show_centered_messagebox("Critical Path Error", "Could not determine application base directory. Cannot continue.", dialog_type="error")
+                else:
+                    tkinter.messagebox.showerror("Critical Path Error", "Could not determine application base directory. Cannot continue.")
+                sys.exit(1)
         except Exception as e_chdir:
-            print(f"[CWD] Warning: Failed to change working directory: {e_chdir}")
+            print(f"[CWD] Warning: Failed to change working directory or create temp: {e_chdir}")
 
         CONFIG_DIR = os.path.join(_SCRIPT_DIR, 'config')
         MODULES_DIR = os.path.join(_SCRIPT_DIR, 'modules')
@@ -2497,11 +2794,12 @@ if __name__ == "__main__":
                     "advanced_login_system": False,
                     "codec_conversions": { "alac": "flac", "wav": "flac", "vorbis": "vorbis" }, 
                     "conversion_flags": {
-                        "flac": { "compression_level": "5" },
+                        "flac": { "compression_level": 5 },
                         "mp3": { "qscale:a": "0" },
                         "aac": { "audio_bitrate": "256k" }
                     },
                     "conversion_keep_original": False,
+                    "ffmpeg_path": "ffmpeg",
                     "cover_variance_threshold": 8,
                     "debug_mode": False,
                     "disable_subscription_checks": False,
@@ -2649,10 +2947,22 @@ if __name__ == "__main__":
         output_frame = customtkinter.CTkFrame(download_tab, fg_color="transparent"); output_frame.grid(row=2, column=0, columnspan=4, sticky="nsew", padx=15, pady=(15, 15)); output_frame.grid_rowconfigure(1, weight=1); output_frame.grid_columnconfigure(0, weight=1)
         output_label = customtkinter.CTkLabel(output_frame, text="OUTPUT", text_color="#898c8d", font=("Segoe UI", 11)); output_label.grid(row=0, column=0, sticky="w", pady=(0, 3)) 
         textbox_container = customtkinter.CTkFrame(output_frame, fg_color="#1D1E1E"); textbox_container.grid(row=1, column=0, sticky="nsew"); textbox_container.grid_columnconfigure(0, weight=1); textbox_container.grid_rowconfigure(0, weight=1); textbox_container.grid_columnconfigure(1, weight=0)  
-        log_textbox = tkinter.Text(textbox_container, wrap=tkinter.WORD, state='disabled', font=("Consolas", 10), 
+        current_os = platform.system()
+        if current_os == "Windows":
+            log_font_family = "Consolas"
+            log_font_size = 10
+        elif current_os == "Darwin":
+            log_font_family = "Menlo"
+            log_font_size = 12
+        else:
+            log_font_family = "DejaVu Sans Mono"
+            log_font_size = 11
+        log_font = (log_font_family, log_font_size)
+
+        log_textbox = tkinter.Text(textbox_container, wrap=tkinter.WORD, state='disabled', font=log_font, 
                                    bg="#1D1E1E", fg="#DCE4EE", insertbackground="#DCE4EE", 
                                    selectbackground="#1F6AA5", selectforeground="#FFFFFF",
-                                   relief="flat", borderwidth=0)
+                                   relief="flat", borderwidth=0, highlightthickness=0)
         log_textbox.grid(row=0, column=0, sticky="nsew", padx=(5,0), pady=3)
         log_scrollbar = customtkinter.CTkScrollbar(textbox_container, command=log_textbox.yview); log_textbox.configure(yscrollcommand=log_scrollbar.set)
         log_textbox.bind("<Configure>", lambda event: _check_and_toggle_text_scrollbar(log_textbox, log_scrollbar) if 'log_textbox' in globals() and log_textbox and log_textbox.winfo_exists() and 'log_scrollbar' in globals() and log_scrollbar and log_scrollbar.winfo_exists() else None)
@@ -2762,6 +3072,7 @@ if __name__ == "__main__":
         global_settings_frame.pack(expand=True, fill="both", padx=0, pady=(0, 5))
         global_settings_frame.grid_columnconfigure(1, weight=1)
         global_settings_frame.grid_columnconfigure(0, uniform="settings_label_column")
+        global_settings_frame.grid_columnconfigure(2, weight=0)
         row = 0
         tooltip_texts = {
             "general.output_path": "The main folder where all downloads will be saved.",
@@ -2800,26 +3111,127 @@ if __name__ == "__main__":
             "playlist.paths_m3u": "Select 'relative' or 'absolute' paths in M3U file.",
             "playlist.extended_m3u": "Include extended info like track length in M3U file.",
             "advanced.advanced_login_system": "Enable advanced login system (Use only if instructed by module documentation).",
+            "advanced.ffmpeg_path": "Full path to the ffmpeg executable \nIf set to just 'ffmpeg', it's assumed to be in the system PATH.\nThis is used for codec conversions.",
             "advanced.codec_conversions": "Defines custom codec conversions (e.g., alac to flac). Enter source format on the left, target on the right.",
             "advanced.conversion_keep_original": "Keep the original file after successful codec conversion.",
             "advanced.cover_variance_threshold": "Tolerance for accepting covers with slightly different sizes (0-100).",
-            "advanced.debug_mode": "Allows various detailed informational and diagnostic messages to be printed to the console.\\nIntended for troubleshooting issues only.",
+            "advanced.debug_mode": "Allows various detailed informational and diagnostic messages to be printed to the console.\nIntended for troubleshooting issues only.",
             "advanced.disable_subscription_checks": "Prevents from checking if subscription for music service you are trying to download from is active.",
-            "advanced.enable_undesirable_conversions": """Controls allowance to perform codec conversions that might result in quality loss or are not recommended.\nExamples:\nLossy-to-Lossy\nLossless-to-Lossy (if not preferred)\nUnnecessary Lossless-to-Lossless""",
+            "advanced.enable_undesirable_conversions": """Controls allowance to perform codec conversions that might result in quality loss or are not recommended.
+Examples:
+Lossy-to-Lossy
+Lossless-to-Lossy (if not preferred)
+Unnecessary Lossless-to-Lossless""",
             "advanced.ignore_existing_files": "Skips downloading files, if a file with the target name already exists in the output directory.",
-            "advanced.ignore_different_artists": "When downloading albums, ignore tracks where the artist differs from the main album artist."
+            "advanced.ignore_different_artists": "When downloading albums, ignore tracks where the artist differs from the main album artist.",
+            "advanced.conversion_flags.aac.audio_bitrate": "Set AAC audio bitrate. Higher is better quality but larger file. Options: 128k, 192k, 256k, 320k.",
+            "advanced.conversion_flags.flac.compression_level": "Set FLAC compression level (0-8). Higher level means smaller file but slower encoding, 0 is fastest, 8 is smallest."
         }
         for section_key, section_value in DEFAULT_SETTINGS["globals"].items():
             if isinstance(section_value, dict):
                 customtkinter.CTkLabel(global_settings_frame, text=section_key.replace("_", " ").upper(), text_color="#898c8d", font=("Segoe UI", 11)).grid(row=row, column=0, columnspan=3, sticky="w", padx=(0, 10), pady=(10, 5)); row += 1
                 for field, default_value in section_value.items():
                     current_value = current_settings["globals"].get(section_key, {}).get(field, default_value); full_key = f"{section_key}.{field}"
-                    if full_key in ["advanced.conversion_flags"]:
-                        continue
+                    if full_key == "advanced.conversion_flags":
+                        aac_label_text = "AAC Audio Bitrate"
+                        aac_full_key = "advanced.conversion_flags.aac.audio_bitrate"
+                        aac_default_val = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["aac"]["audio_bitrate"]
+                        aac_current_val = str(current_settings["globals"].get("advanced", {}).get("conversion_flags", {}).get("aac", {}).get("audio_bitrate", aac_default_val))
+                        
+                        customtkinter.CTkLabel(global_settings_frame, text=aac_label_text).grid(row=row, column=0, sticky="w", padx=(20, 10), pady=2)
+                        aac_slider_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
+                        aac_slider_frame.grid(row=row, column=1, columnspan=2, sticky="ew", padx=5, pady=2)
+                        aac_slider_frame.grid_columnconfigure(0, weight=1)
 
+                        aac_options_list = ["128k", "192k", "256k", "320k"]
+                        aac_options_map = {val: i for i, val in enumerate(aac_options_list)}
+                        
+                        aac_var = tkinter.StringVar(value=aac_current_val)
+                        if "globals" not in settings_vars: settings_vars["globals"] = {}
+                        settings_vars["globals"][aac_full_key] = aac_var
+                        
+                        aac_value_disp_label = customtkinter.CTkLabel(aac_slider_frame, text=aac_current_val, width=70, anchor="e")
+                        aac_value_disp_label.grid(row=0, column=1, sticky="e")
+
+                        def _update_aac_slider_display(slider_value_idx, var=aac_var, disp_label=aac_value_disp_label):
+                            selected_bitrate = aac_options_list[int(slider_value_idx)]
+                            var.set(selected_bitrate)
+                            disp_label.configure(text=selected_bitrate)
+
+                        aac_slider_pos = aac_options_map.get(aac_current_val, aac_options_map.get(aac_default_val, 2))
+                        aac_slider_widget = customtkinter.CTkSlider(aac_slider_frame, from_=0, to=len(aac_options_list)-1, number_of_steps=len(aac_options_list)-1, command=_update_aac_slider_display)
+                        aac_slider_widget.set(aac_slider_pos)
+                        aac_slider_widget.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+                        CTkToolTip(aac_slider_frame, message=tooltip_texts.get(aac_full_key, ""), bg_color="#1D1D1D")
+                        row += 1
+                        flac_label_text = "FLAC Compression Level"
+                        flac_full_key = "advanced.conversion_flags.flac.compression_level"
+                        flac_default_val = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["flac"]["compression_level"]
+                        flac_current_val = int(current_settings["globals"].get("advanced", {}).get("conversion_flags", {}).get("flac", {}).get("compression_level", flac_default_val))
+
+                        customtkinter.CTkLabel(global_settings_frame, text=flac_label_text).grid(row=row, column=0, sticky="w", padx=(20, 10), pady=2)
+                        flac_slider_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
+                        flac_slider_frame.grid(row=row, column=1, columnspan=2, sticky="ew", padx=5, pady=2)
+                        flac_slider_frame.grid_columnconfigure(0, weight=1)
+                        
+                        flac_var = tkinter.StringVar(value=str(flac_current_val))
+                        settings_vars["globals"][flac_full_key] = flac_var
+
+                        flac_value_disp_label = customtkinter.CTkLabel(flac_slider_frame, text=str(flac_current_val), width=70, anchor="e")
+                        flac_value_disp_label.grid(row=0, column=1, sticky="e")
+
+                        def _update_flac_slider_display(slider_value, var=flac_var, disp_label=flac_value_disp_label):
+                            val_int = int(slider_value)
+                            var.set(str(val_int))
+                            disp_label.configure(text=str(val_int))
+                        
+                        flac_slider_widget = customtkinter.CTkSlider(flac_slider_frame, from_=0, to=8, number_of_steps=8, command=_update_flac_slider_display)
+                        flac_slider_widget.set(flac_current_val)
+                        flac_slider_widget.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+                        CTkToolTip(flac_slider_frame, message=tooltip_texts.get(flac_full_key, ""), bg_color="#1D1D1D")
+                        row += 1
+                        mp3_label_text = "MP3 Encoding"
+                        mp3_setting_key = "advanced.conversion_flags.mp3.setting"
+                        mp3_conf_flags = current_settings["globals"].get("advanced", {}).get("conversion_flags", {}).get("mp3", {})
+                        mp3_default_conf_flags = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["mp3"]
+
+                        mp3_options_list = ["128k", "192k", "256k", "320k", "VBR -V0"]
+                        mp3_options_map = {val: i for i, val in enumerate(mp3_options_list)}
+                        
+                        current_mp3_display_val = "VBR -V0"
+                        if "audio_bitrate" in mp3_conf_flags:
+                            current_mp3_display_val = mp3_conf_flags["audio_bitrate"]
+                        elif "qscale:a" in mp3_conf_flags and mp3_conf_flags["qscale:a"] == "0":
+                            current_mp3_display_val = "VBR -V0"
+                        
+                        customtkinter.CTkLabel(global_settings_frame, text=mp3_label_text).grid(row=row, column=0, sticky="w", padx=(20, 10), pady=2)
+                        mp3_slider_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
+                        mp3_slider_frame.grid(row=row, column=1, columnspan=2, sticky="ew", padx=5, pady=2)
+                        mp3_slider_frame.grid_columnconfigure(0, weight=1)
+
+                        mp3_var = tkinter.StringVar(value=current_mp3_display_val)
+                        settings_vars["globals"][mp3_setting_key] = mp3_var
+                        settings_vars["globals"].pop("advanced.conversion_flags.mp3.qscale:a", None)
+                        settings_vars["globals"].pop("advanced.conversion_flags.mp3.audio_bitrate", None)
+
+                        mp3_value_disp_label = customtkinter.CTkLabel(mp3_slider_frame, text=current_mp3_display_val, width=70, anchor="e")
+                        mp3_value_disp_label.grid(row=0, column=1, sticky="e")
+
+                        def _update_mp3_slider_display(slider_value_idx, var=mp3_var, disp_label=mp3_value_disp_label):
+                            selected_text = mp3_options_list[int(slider_value_idx)]
+                            var.set(selected_text)
+                            disp_label.configure(text=selected_text)
+
+                        mp3_slider_pos = mp3_options_map.get(current_mp3_display_val, len(mp3_options_list)-1)
+                        mp3_slider_widget = customtkinter.CTkSlider(mp3_slider_frame, from_=0, to=len(mp3_options_list)-1, number_of_steps=len(mp3_options_list)-1, command=_update_mp3_slider_display)
+                        mp3_slider_widget.set(mp3_slider_pos)
+                        mp3_slider_widget.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+                        tooltip_mp3_text = tooltip_texts.get("advanced.conversion_flags.mp3.setting", "MP3 Encoding Settings:\n128k-320k are Constant Bitrate (CBR).\nVBR -V0 uses qscale:a 0 for highest variable bitrate quality.")
+                        CTkToolTip(mp3_slider_frame, message=tooltip_mp3_text, bg_color="#1D1D1D")
+                        row += 1
+                        continue
                     label_widget = customtkinter.CTkLabel(global_settings_frame, text=field.replace("_", " ").title())
                     label_widget.grid(row=row, column=0, sticky="w", padx=(10, 10), pady=2)
-
                     widget = None; browse_btn = None
 
                     if isinstance(default_value, bool):
@@ -2831,8 +3243,6 @@ if __name__ == "__main__":
                             codec_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
                             codec_frame.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
                             codec_frame.grid_columnconfigure(2, weight=1)
-                            print(f"  - current_value (from settings.json via current_settings): {current_value}")
-                            print(f"  - default_value (from DEFAULT_SETTINGS): {default_value}")
 
                             merged_conversions = default_value.copy() if isinstance(default_value, dict) else {}
                             if isinstance(current_value, dict):
@@ -2866,15 +3276,16 @@ if __name__ == "__main__":
                          var = tkinter.StringVar(value=str(current_value)); settings_vars["globals"][full_key] = var
                          if section_key == "general" and field == "output_path":
                             widget = customtkinter.CTkEntry(global_settings_frame, textvariable=var)
-                            widget.grid(row=row, column=1, sticky="ew", padx=(5, 0), pady=2)
+                            widget.grid(row=row, column=1, sticky="ew", padx=(5,1))
                             widget.bind("<Button-3>", show_context_menu)
                             widget.bind("<FocusIn>", lambda e, w=widget: handle_focus_in(w))
                             widget.bind("<FocusOut>", lambda e, w=widget: handle_focus_out(w))
-                            browse_btn = customtkinter.CTkButton(global_settings_frame, text="⋯", width=30, height=widget._current_height,
+                            browse_btn = customtkinter.CTkButton(global_settings_frame, text="Browse", width=80, height=widget._current_height,
                                                                command=lambda v=var: browse_output_path(v),
                                                                fg_color=widget._fg_color, hover_color="#1F6AA5",
-                                                               border_width=2, border_color=widget._border_color)
-                            browse_btn.grid(row=row, column=2, sticky="w", padx=(1, 5))
+                                                               border_width=widget._border_width if hasattr(widget, '_border_width') else 0, 
+                                                               border_color=widget._border_color if hasattr(widget, '_border_color') else None)
+                            browse_btn.grid(row=row, column=2, sticky="w", padx=(1,5))
                          elif section_key == "general" and field == "quality":
                             quality_options = ["hifi", "lossless", "high", "low"]
                             current_val_str = var.get().lower()
@@ -2940,7 +3351,7 @@ if __name__ == "__main__":
                             slider_frame.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
                             slider_frame.grid_columnconfigure(0, weight=1)
                             
-                            value_label = customtkinter.CTkLabel(slider_frame, text=f"{current_res}px", width=60)
+                            value_label = customtkinter.CTkLabel(slider_frame, text=f"{current_res}px", width=70)
                             value_label.grid(row=0, column=1, sticky="e")
                             
                             def update_resolution_value(value, var_ref=var, label_ref=value_label):
@@ -2969,7 +3380,7 @@ if __name__ == "__main__":
                             slider_frame.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
                             slider_frame.grid_columnconfigure(0, weight=1)
                             
-                            value_label = customtkinter.CTkLabel(slider_frame, text=f"{current_res}px", width=60)
+                            value_label = customtkinter.CTkLabel(slider_frame, text=f"{current_res}px", width=70)
                             value_label.grid(row=0, column=1, sticky="e")
                             
                             def update_external_resolution_value(value, var_ref=var, label_ref=value_label):
@@ -3012,7 +3423,7 @@ if __name__ == "__main__":
                             slider_frame.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
                             slider_frame.grid_columnconfigure(0, weight=1)
                             
-                            value_label = customtkinter.CTkLabel(slider_frame, text=f"{current_threshold}%", width=60)
+                            value_label = customtkinter.CTkLabel(slider_frame, text=f"{current_threshold}%", width=70)
                             value_label.grid(row=0, column=1, sticky="e")
                             
                             def update_threshold_value(value, var_ref=var, label_ref=value_label):
@@ -3027,6 +3438,23 @@ if __name__ == "__main__":
                             var.set(str(current_threshold))
 
                             widget = slider_frame
+                         elif section_key == "advanced" and field == "ffmpeg_path":
+                            ffmpeg_path_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
+                            ffmpeg_path_frame.grid(row=row, column=1, columnspan=2, sticky="ew", padx=5, pady=2)
+                            ffmpeg_path_frame.grid_columnconfigure(0, weight=1)
+
+                            widget = customtkinter.CTkEntry(ffmpeg_path_frame, textvariable=var)
+                            widget.grid(row=0, column=0, sticky="ew", padx=(0,1))
+                            widget.bind("<Button-3>", show_context_menu)
+                            widget.bind("<FocusIn>", lambda e, w=widget: handle_focus_in(w))
+                            widget.bind("<FocusOut>", lambda e, w=widget: handle_focus_out(w))
+
+                            browse_btn = customtkinter.CTkButton(ffmpeg_path_frame, text="Browse", width=80, height=widget._current_height,
+                                                               command=lambda v=var: browse_ffmpeg_path(v),
+                                                               fg_color=widget._fg_color, hover_color="#1F6AA5",
+                                                               border_width=widget._border_width if hasattr(widget, '_border_width') else 0, 
+                                                               border_color=widget._border_color if hasattr(widget, '_border_color') else None)
+                            browse_btn.grid(row=0, column=1, sticky="w", padx=(1,0))
                          else:
                             widget = customtkinter.CTkEntry(global_settings_frame, textvariable=var)
                             widget.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
@@ -3039,11 +3467,9 @@ if __name__ == "__main__":
                          CTkToolTip(widget, message=tooltip_text, bg_color="#1D1D1D")
 
                     row += 1
-        print("[Settings Tabs] Creating placeholder tabs based on installed platform_keys...")        
         credential_keys_for_settings_tabs = [pk for pk in installed_platform_keys if pk != "Musixmatch"]        
         
         sorted_platform_keys_for_tabs = sorted(credential_keys_for_settings_tabs)
-        print(f"[Settings Tabs] Will display tabs for: {sorted_platform_keys_for_tabs}")
         for platform_key in sorted_platform_keys_for_tabs:
             platform_tab_frame = settings_tabview.add(platform_key)
             credential_tab_frames[platform_key] = platform_tab_frame
