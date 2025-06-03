@@ -1317,6 +1317,9 @@ class QueueWriter(io.TextIOBase):
         
         if msg_strip.startswith("Download attempt ") and "failed. Retrying in" in msg_strip:
             return len(msg)
+        
+        if "[Music Downloader] force_album_format is ON, but no valid album_info found for track" in msg_strip and "album_id: ''" in msg_strip:
+            return len(msg)
 
         is_fetching_line = False
         if msg_strip.startswith("Fetching "):
