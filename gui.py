@@ -1398,7 +1398,6 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                 if gui_settings.get("globals",{}).get("advanced",{}).get("conversion_flags",{}).get("mp3",{}).get("audio_bitrate"):
                     cleaned_mp3_flags = {"audio_bitrate": gui_settings["globals"]["advanced"]["conversion_flags"]["mp3"]["audio_bitrate"]}
                     downloader_settings["advanced"]["conversion_flags"]["mp3"] = cleaned_mp3_flags
-                    print(f"[RunThread DEBUG] Cleaned MP3 flags to: {cleaned_mp3_flags}")
                 elif gui_settings.get("globals",{}).get("advanced",{}).get("conversion_flags",{}).get("mp3",{}).get("qscale:a"):
                     cleaned_mp3_flags = {"qscale:a": gui_settings["globals"]["advanced"]["conversion_flags"]["mp3"]["qscale:a"]}
                     downloader_settings["advanced"]["conversion_flags"]["mp3"] = cleaned_mp3_flags
@@ -1414,58 +1413,19 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         for netloc_pattern, mod_name in orpheus.module_netloc_constants.items():
             if re.findall(netloc_pattern, parsed_url.netloc): module_name = mod_name; break
         if not module_name: raise ValueError(f"Could not determine module for URL host: {parsed_url.netloc}")
-
-        if orpheus.module_settings[module_name].url_decoding is ManualEnum.manual:
-            module_instance = orpheus.load_module(module_name)
-            media_ident: MediaIdentification = module_instance.custom_url_parse(url)
-            if not media_ident: raise ValueError(f"Module '{module_name}' custom_url_parse failed for URL: {url}")
-            media_type = media_ident.media_type; media_id = media_ident.media_id
-        else:
-            media_id = None
-            media_type = None
-            if module_name == 'jiosaavn' and len(components) > 2 and components[1] == 'song':
-                media_type = DownloadTypeEnum.track
-                media_id = components[-1]
-                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-                    print(f"[URL Parse - JioSaavn Specific] Detected Type: {media_type}, ID: {media_id}")
-            if media_id is None or media_type is None:
-                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-                    print("[URL Parse] Using general parsing logic...")
-                if not components or len(components) <= 2:
-                     if len(components) == 2 and components[1]: raise ValueError(f"Could not determine media type from short URL path: {parsed_url.path}")
-                     else: raise ValueError(f"Invalid URL path structure: {parsed_url.path}")
-                url_constants = orpheus.module_settings[module_name].url_constants
-                if not url_constants: url_constants = {'track': DownloadTypeEnum.track, 'album': DownloadTypeEnum.album, 'release': DownloadTypeEnum.album, 'playlist': DownloadTypeEnum.playlist, 'artist': DownloadTypeEnum.artist}
-                type_matches = []; parsed_media_id = None
-                for i, component in enumerate(components):
-                    if isinstance(component, str):
-                        for url_keyword, type_enum in url_constants.items():
-                            if component == url_keyword:
-                                type_matches.append(type_enum)
-                                break
-                        if type_matches: break
-                if not type_matches: raise ValueError(f"Could not determine media type from URL path components: {components}")
-                media_type = type_matches[-1]
-                if len(components) > 1:
-                    media_id = components[-1]                    
-                else:
-                    raise ValueError(f"Could not determine media ID from URL path: {parsed_url.path}")
-                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-                    print(f"[URL Parse - General Force Last] Detected Type: {media_type}, ID: {media_id}")
-            if module_name == 'beatsource' and 'playlist' in components and len(components) > 2:
-                print("[URL Parse] Applying specific Beatsource playlist logic...")
-                media_type = DownloadTypeEnum.playlist
-                media_id = components[-1]
-                print(f"[URL Parse - Beatsource Specific] Detected Type: {media_type}, ID: {media_id}")
-            elif module_name == 'beatport' and 'chart' in components and len(components) > 2:
-                print("[URL Parse] Applying specific Beatport chart logic...")
-                media_type = DownloadTypeEnum.playlist
-                media_id = components[-1]
-                print(f"[URL Parse - Beatport Specific] Detected Type: {media_type}, ID: {media_id}")
+        try:
+            if orpheus.module_settings[module_name].url_decoding is ManualEnum.manual:
+                module_instance = orpheus.load_module(module_name)
+                media_ident: MediaIdentification = module_instance.custom_url_parse(url)
+                if not media_ident: raise ValueError(f"Module '{module_name}' custom_url_parse failed for URL: {url}")
+                media_type = media_ident.media_type; media_id = media_ident.media_id
             else:
+                media_id = None
+                media_type = None
+                if module_name == 'jiosaavn' and len(components) > 2 and components[1] == 'song':
+                    media_type = DownloadTypeEnum.track
+                    media_id = components[-1]
                 if media_id is None or media_type is None:
-                    if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-                        print("[URL Parse] Applying general parsing logic (fallback)...")
                     if not components or len(components) <= 2:
                          if len(components) == 2 and components[1]: raise ValueError(f"Could not determine media type from short URL path: {parsed_url.path}")
                          else: raise ValueError(f"Invalid URL path structure: {parsed_url.path}")
@@ -1482,187 +1442,229 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                     if not type_matches: raise ValueError(f"Could not determine media type from URL path components: {components}")
                     media_type = type_matches[-1]
                     if len(components) > 1:
-                        media_id = components[-1]                        
+                        media_id = components[-1]                    
                     else:
                         raise ValueError(f"Could not determine media ID from URL path: {parsed_url.path}")
-                    if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-                        print(f"[URL Parse - General Fallback] Detected Type: {media_type}, ID: {media_id}")
-
-        downloader.service = orpheus.load_module(module_name)
-        downloader.service_name = module_name
-        downloader.download_mode = media_type
-        
-        is_beatport_chart = False
-        
-        if media_type == DownloadTypeEnum.track:
-            if stop_event.is_set(): is_cancelled = True
-            else:
-                oprinter.oprint(f"Processing track: {media_id}")
-                downloader.download_track(track_id=str(media_id), album_location=output_path + '/')
-                output_queue.put('\n')
-        elif media_type == DownloadTypeEnum.playlist:
-            oprinter.oprint(f"Fetching playlist info: {media_id}")
-            data_dict = {}; raw_result = search_result_data.get('raw_result') if search_result_data else None
-            
-            if module_name == 'beatport' and 'chart' in components:
-                is_beatport_chart = True
-                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-                    print(f"[GUI DEBUG] Detected Beatport chart, will use is_chart=True")
-            
-            if downloader.service_name == 'soundcloud':
-                try:
-                    oprinter.oprint(f"Resolving SoundCloud URL for playlist {media_id}...")
-                    resolved_data = downloader.service.websession.resolve_url(url)
-                    if resolved_data and resolved_data.get('id') == media_id: data_dict = {media_id: resolved_data}
-                    else: oprinter.oprint(f"[Warning] Failed to resolve SoundCloud URL or ID mismatch for {media_id}. Proceeding without pre-fetched data."); data_dict = {}
-                except Exception as e: oprinter.oprint(f"[Error] Resolving SoundCloud URL failed: {e}"); data_dict = {}
-            playlist_info = None
-            if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-                print(f"[GUI DEBUG] Calling get_playlist_info with playlist_id = '{media_id}'" + (f", is_chart=True" if is_beatport_chart else ""))
-            try:
-                if downloader.service_name == 'soundcloud':
-                    playlist_info = downloader.service.get_playlist_info(playlist_id=media_id, data=data_dict)
-                elif downloader.service_name == 'deezer':
-                    playlist_info = downloader.service.get_playlist_info(playlist_id=media_id, data={})
-                elif downloader.service_name == 'beatport' and is_beatport_chart:
-                    playlist_info = downloader.service.get_playlist_info(playlist_id=media_id, is_chart=True)
+                if module_name == 'beatsource' and 'playlist' in components and len(components) > 2:
+                    media_type = DownloadTypeEnum.playlist
+                    media_id = components[-1]
+                elif module_name == 'beatport' and 'chart' in components and len(components) > 2:
+                    media_type = DownloadTypeEnum.playlist
+                    media_id = components[-1]
                 else:
-                    playlist_info = downloader.service.get_playlist_info(playlist_id=media_id)
-            except Exception as e:
-                oprinter.oprint(f"[Error] Failed to get playlist info for {media_id}: {e}")
-
-            if playlist_info and playlist_info.tracks:
-                num_tracks = len(playlist_info.tracks); oprinter.oprint(f"Playlist '{playlist_info.name}' contains {num_tracks} tracks.")
-                playlist_tags = {}; raw_tags = playlist_info.asdict() if hasattr(playlist_info, 'asdict') else vars(playlist_info)
-                for k, v in raw_tags.items():
-                    if isinstance(v, (str, int, bool, float)): playlist_tags[k] = re.sub(r'[\\/:*?"<>|]', '_', str(v)).strip() if isinstance(v, str) else v
-                playlist_tags['explicit'] = ' [E]' if playlist_info.explicit else ''; playlist_path_format = downloader_settings['formatting']['playlist_format']
-                output_queue.put(f"Starting playlist download: '{playlist_info.name}' ({num_tracks} tracks)\n")
-                try: relative_playlist_path = playlist_path_format.format(**playlist_tags)
-                except KeyError as fmt_e: print(f"[Warning] Formatting KeyError for playlist path: {fmt_e}. Using default name."); relative_playlist_path = f"Playlist_{media_id}"
-                relative_playlist_path = re.sub(r'[\\/:*?"<>|]', '_', relative_playlist_path).strip(); full_playlist_path = os.path.join(output_path, relative_playlist_path) + '/'; os.makedirs(full_playlist_path, exist_ok=True)
-
-                for index, track_id in enumerate(playlist_info.tracks, start=1):
-                    if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before track {index}/{num_tracks}."); break
-                    output_queue.put("\n")
-                    oprinter.oprint(f"Processing playlist track {index}/{num_tracks}: {track_id}")
-                    percentage = (index / num_tracks) * 100; output_queue.put(f"Progress: Track {index}/{num_tracks} ({percentage:.0f}%)"); output_queue.put('\n\n')
-                    downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=full_playlist_path, track_index=index, number_of_tracks=num_tracks, extra_kwargs=playlist_info.track_extra_kwargs)
-                    output_queue.put('\n')
-            else: oprinter.oprint(f"Could not retrieve playlist info or playlist is empty.")
-        elif media_type == DownloadTypeEnum.album:
-            oprinter.oprint(f"Fetching album info: {media_id}")
-            data_dict = {}; raw_result = search_result_data.get('raw_result') if search_result_data else None
-            if downloader.service_name == 'soundcloud':
-                try:
-                    oprinter.oprint(f"Resolving SoundCloud URL for album {media_id}...")
-                    resolved_data = downloader.service.websession.resolve_url(url)
-                    if resolved_data and resolved_data.get('id') == media_id: data_dict = {media_id: resolved_data}
-                    else: oprinter.oprint(f"[Warning] Failed to resolve SoundCloud URL or ID mismatch for album {media_id}."); data_dict = {}
-                except Exception as e: oprinter.oprint(f"[Error] Resolving SoundCloud URL failed: {e}"); data_dict = {}
-
-            album_info = None
-            try:
-                if downloader.service_name == 'soundcloud':
-                    album_info = downloader.service.get_album_info(album_id=media_id, data=data_dict)
-                elif downloader.service_name == 'deezer':
-                     album_info = downloader.service.get_album_info(album_id=media_id, data={})
-                else:
-                    album_info = downloader.service.get_album_info(album_id=media_id)
-            except Exception as e:
-                 oprinter.oprint(f"[Error] Failed to get album info for {media_id}: {e}")
-
-            if album_info and album_info.tracks:
-                num_tracks = len(album_info.tracks); output_queue.put(f"Starting album download: '{album_info.name}' ({num_tracks} tracks)\n")
-                album_path = downloader._create_album_location(output_path, media_id, album_info); downloader.print(f'=== Downloading album {album_info.name} ({media_id}) ==='); downloader._download_album_files(album_path, album_info)
-                for index, track_id in enumerate(album_info.tracks, start=1):
-                    if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before track {index}/{num_tracks}."); break
-                    output_queue.put("\n")
-                    downloader.set_indent_number(2); oprinter.oprint(f"Processing album track {index}/{num_tracks}: {track_id}")
-                    percentage = (index / num_tracks) * 100; output_queue.put(f"Progress: Track {index}/{num_tracks} ({percentage:.0f}%)"); output_queue.put('\n\n')
-                    downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=album_path, track_index=index, number_of_tracks=num_tracks, extra_kwargs=album_info.track_extra_kwargs, indent_level=2)
-                    output_queue.put('\n')
-                downloader.set_indent_number(1)
-            else: oprinter.oprint(f"Could not retrieve album info or album is empty.")
-        elif media_type == DownloadTypeEnum.artist:
-            oprinter.oprint(f"Fetching artist info: {media_id}")
-            data_dict = {}; raw_result = search_result_data.get('raw_result') if search_result_data else None
-            if downloader.service_name == 'soundcloud':
-                try:
-                    oprinter.oprint(f"Resolving SoundCloud URL for artist {media_id}...")
-                    resolved_data = downloader.service.websession.resolve_url(url)
-                    if resolved_data and resolved_data.get('id') == media_id: data_dict = {media_id: resolved_data}
-                    else: oprinter.oprint(f"[Warning] Failed to resolve SoundCloud URL or ID mismatch for {media_id}. Proceeding without pre-fetched data."); data_dict = {}
-                except Exception as e: oprinter.oprint(f"[Error] Resolving SoundCloud URL failed: {e}"); data_dict = {}
-
-            artist_info = None
-            try:
-                if downloader.service_name == 'soundcloud':
-                    artist_info = downloader.service.get_artist_info(artist_id=media_id, get_credited_albums=downloader_settings['artist_downloading']['return_credited_albums'], data=data_dict)
-                else:
-                    artist_info = downloader.service.get_artist_info(artist_id=media_id, get_credited_albums=downloader_settings['artist_downloading']['return_credited_albums'])
-            except Exception as e:
-                 oprinter.oprint(f"[Error] Failed to get artist info for {media_id}: {e}")
-
-            if artist_info:
-                artist_name = artist_info.name; oprinter.oprint(f"=== Downloading artist {artist_name} ({media_id}) ===")
-                sanitized_artist_name = re.sub(r'[\\/:*?"<>|]', '_', artist_name).strip(); artist_path = os.path.join(output_path, sanitized_artist_name) + '/'; os.makedirs(artist_path, exist_ok=True)
-                num_albums = len(artist_info.albums); tracks_downloaded_in_albums = []
-                output_queue.put(f"Starting artist download: '{artist_name}' ({num_albums} albums + {len(artist_info.tracks)} potential tracks)\n")
-                oprinter.oprint(f"Processing {num_albums} albums...")
-
-                for index, album_id in enumerate(artist_info.albums, start=1):
-                    if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before album {index}/{num_albums}."); break
-                    output_queue.put("\n")
-                    oprinter.oprint(f"Processing album {index}/{num_albums}: {album_id}")
-                    data_dict_for_album = {}
-                    album_info_for_artist = None
-
-                    try:
-                        if downloader.service_name == 'soundcloud':
-                            try:
-                                oprinter.oprint(f"  Fetching SoundCloud album metadata for {album_id}...")
-                                fetched_album_data = downloader.service.websession._get(f'playlists/{album_id}')
-                                if fetched_album_data: data_dict_for_album = {album_id: fetched_album_data}
-                                else: oprinter.oprint(f"  [Warning] Could not fetch metadata for SoundCloud album {album_id}.")
-                            except Exception as e_sc_album: oprinter.oprint(f"  [Error] Fetching SoundCloud album metadata failed: {e_sc_album}")
-                            album_info_for_artist = downloader.service.get_album_info(album_id=album_id, data=data_dict_for_album)
-                        elif downloader.service_name == 'deezer':
-                            album_info_for_artist = downloader.service.get_album_info(album_id=album_id, data={})
+                    if media_id is None or media_type is None:
+                        if not components or len(components) <= 2:
+                             if len(components) == 2 and components[1]: raise ValueError(f"Could not determine media type from short URL path: {parsed_url.path}")
+                             else: raise ValueError(f"Invalid URL path structure: {parsed_url.path}")
+                        url_constants = orpheus.module_settings[module_name].url_constants
+                        if not url_constants: url_constants = {'track': DownloadTypeEnum.track, 'album': DownloadTypeEnum.album, 'release': DownloadTypeEnum.album, 'playlist': DownloadTypeEnum.playlist, 'artist': DownloadTypeEnum.artist}
+                        type_matches = []; parsed_media_id = None
+                        for i, component in enumerate(components):
+                            if isinstance(component, str):
+                                for url_keyword, type_enum in url_constants.items():
+                                    if component == url_keyword:
+                                        type_matches.append(type_enum)
+                                        break
+                                if type_matches: break
+                        if not type_matches: raise ValueError(f"Could not determine media type from URL path components: {components}")
+                        media_type = type_matches[-1]
+                        if len(components) > 1:
+                            media_id = components[-1]                        
                         else:
-                            album_info_for_artist = downloader.service.get_album_info(album_id=album_id)
-                    except Exception as e_album_get:
-                        oprinter.oprint(f"Could not get info for album {album_id}, skipping. Error: {e_album_get}")
-                        continue
+                            raise ValueError(f"Could not determine media ID from URL path: {parsed_url.path}")
 
-                    if album_info_for_artist and album_info_for_artist.tracks:
-                         album_path = downloader._create_album_location(artist_path, album_id, album_info_for_artist); downloader._download_album_files(album_path, album_info_for_artist)
-                         num_album_tracks = len(album_info_for_artist.tracks); output_queue.put(f"Artist Progress: Album {index}/{num_albums} - '{album_info_for_artist.name}' ({num_album_tracks} tracks)\n")
-                         for track_index, track_id in enumerate(album_info_for_artist.tracks, start=1):
-                             if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling during album '{album_info_for_artist.name}' before track {track_index}/{num_album_tracks}."); break
-                             output_queue.put("\n")
-                             downloader.set_indent_number(3); oprinter.oprint(f"Processing album track {track_index}/{num_album_tracks}: {track_id}")
-                             track_percentage = (track_index / num_album_tracks) * 100; output_queue.put(f"  -> Album Track {track_index}/{num_album_tracks} ({track_percentage:.0f}%)"); output_queue.put('\n\n')
-                             downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=album_path, track_index=track_index, number_of_tracks=num_album_tracks, main_artist=artist_name, extra_kwargs=album_info_for_artist.track_extra_kwargs, indent_level=3)
-                             output_queue.put('\n'); tracks_downloaded_in_albums.append(str(track_id.id) if hasattr(track_id, 'id') else str(track_id))
-                         if is_cancelled: break
-                if is_cancelled: pass
-                elif not is_cancelled:
-                    skip_tracks = downloader_settings['artist_downloading']['separate_tracks_skip_downloaded']
-                    standalone_tracks = [tid_obj for tid_obj in artist_info.tracks if not skip_tracks or (str(tid_obj.id) if hasattr(tid_obj, 'id') else str(tid_obj)) not in tracks_downloaded_in_albums]; num_standalone = len(standalone_tracks)
-                    if num_standalone > 0:
-                        oprinter.oprint(f"Processing {num_standalone} standalone tracks..."); output_queue.put(f"Artist Progress: Processing {num_standalone} standalone tracks...\n")
-                        for index, track_id_obj in enumerate(standalone_tracks, start=1):
-                            if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before standalone track {index}/{num_standalone}."); break
-                            output_queue.put("\n")
-                            downloader.set_indent_number(2); oprinter.oprint(f"Processing standalone track {index}/{num_standalone}: {track_id_obj}")
-                            standalone_percentage = (index / num_standalone) * 100; output_queue.put(f"  -> Standalone Track {index}/{num_standalone} ({standalone_percentage:.0f}%)"); output_queue.put('\n\n')
-                            downloader.download_track(track_id=str(track_id_obj.id) if hasattr(track_id_obj, 'id') else str(track_id_obj), album_location=artist_path, main_artist=artist_name, number_of_tracks=1, indent_level=2, extra_kwargs=artist_info.track_extra_kwargs)
-                            output_queue.put('\n')
-            else: oprinter.oprint(f"Could not retrieve artist info.")
-        else: print(f"ERROR: Unknown media type '{media_type.name if hasattr(media_type, 'name') else media_type}' encountered.")
+            downloader.service = orpheus.load_module(module_name)
+            downloader.service_name = module_name
+            downloader.download_mode = media_type
+            
+            is_beatport_chart = False
+            
+            if media_type == DownloadTypeEnum.track:
+                if stop_event.is_set(): is_cancelled = True
+                else:
+                    oprinter.oprint(f"Processing track: {media_id}")
+                    downloader.download_track(track_id=str(media_id), album_location=output_path + '/')
+                    output_queue.put('\n')
+            elif media_type == DownloadTypeEnum.playlist:
+                oprinter.oprint(f"Fetching playlist info: {media_id}")
+                data_dict = {}; raw_result = search_result_data.get('raw_result') if search_result_data else None
+                
+                if module_name == 'beatport' and 'chart' in components:
+                    is_beatport_chart = True
+                
+                if downloader.service_name == 'soundcloud':
+                    try:
+                        oprinter.oprint(f"Resolving SoundCloud URL for playlist {media_id}...")
+                        resolved_data = downloader.service.websession.resolve_url(url)
+                        if resolved_data and resolved_data.get('id') == media_id: data_dict = {media_id: resolved_data}
+                        else: oprinter.oprint(f"[Warning] Failed to resolve SoundCloud URL or ID mismatch for {media_id}. Proceeding without pre-fetched data."); data_dict = {}
+                    except Exception as e: oprinter.oprint(f"[Error] Resolving SoundCloud URL failed: {e}"); data_dict = {}
+                playlist_info = None
+                try:
+                    if downloader.service_name == 'soundcloud':
+                        playlist_info = downloader.service.get_playlist_info(playlist_id=media_id, data=data_dict)
+                    elif downloader.service_name == 'deezer':
+                        playlist_info = downloader.service.get_playlist_info(playlist_id=media_id, data={})
+                    elif downloader.service_name == 'beatport' and is_beatport_chart:
+                        playlist_info = downloader.service.get_playlist_info(playlist_id=media_id, is_chart=True)
+                    else:
+                        playlist_info = downloader.service.get_playlist_info(playlist_id=media_id)
+                except Exception as e:
+                    oprinter.oprint(f"[Error] Failed to get playlist info for {media_id}: {e}")
 
-        if is_cancelled: print("\nDownload Cancelled.")
+                if playlist_info and playlist_info.tracks:
+                    num_tracks = len(playlist_info.tracks); oprinter.oprint(f"Playlist '{playlist_info.name}' contains {num_tracks} tracks.")
+                    playlist_tags = {}; raw_tags = playlist_info.asdict() if hasattr(playlist_info, 'asdict') else vars(playlist_info)
+                    for k, v in raw_tags.items():
+                        if isinstance(v, (str, int, bool, float)): playlist_tags[k] = re.sub(r'[\\/:*?"<>|]', '_', str(v)).strip() if isinstance(v, str) else v
+                    playlist_tags['explicit'] = ' [E]' if playlist_info.explicit else ''; playlist_path_format = downloader_settings['formatting']['playlist_format']
+                    output_queue.put(f"Starting playlist download: '{playlist_info.name}' ({num_tracks} tracks)\n")
+                    try: relative_playlist_path = playlist_path_format.format(**playlist_tags)
+                    except KeyError as fmt_e: print(f"[Warning] Formatting KeyError for playlist path: {fmt_e}. Using default name."); relative_playlist_path = f"Playlist_{media_id}"
+                    relative_playlist_path = re.sub(r'[\\/:*?"<>|]', '_', relative_playlist_path).strip(); full_playlist_path = os.path.join(output_path, relative_playlist_path) + '/'; os.makedirs(full_playlist_path, exist_ok=True)
+
+                    for index, track_id in enumerate(playlist_info.tracks, start=1):
+                        if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before track {index}/{num_tracks}."); break
+                        output_queue.put("\n")
+                        oprinter.oprint(f"Processing playlist track {index}/{num_tracks}: {track_id}")
+                        percentage = (index / num_tracks) * 100; output_queue.put(f"Progress: Track {index}/{num_tracks} ({percentage:.0f}%)"); output_queue.put('\n\n')
+                        downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=full_playlist_path, track_index=index, number_of_tracks=num_tracks, extra_kwargs=playlist_info.track_extra_kwargs)
+                        output_queue.put('\n')
+                else: oprinter.oprint(f"Could not retrieve playlist info or playlist is empty.")
+            elif media_type == DownloadTypeEnum.album:
+                oprinter.oprint(f"Fetching album info: {media_id}")
+                data_dict = {}; raw_result = search_result_data.get('raw_result') if search_result_data else None
+                if downloader.service_name == 'soundcloud':
+                    try:
+                        oprinter.oprint(f"Resolving SoundCloud URL for album {media_id}...")
+                        resolved_data = downloader.service.websession.resolve_url(url)
+                        if resolved_data and resolved_data.get('id') == media_id: data_dict = {media_id: resolved_data}
+                        else: oprinter.oprint(f"[Warning] Failed to resolve SoundCloud URL or ID mismatch for album {media_id}."); data_dict = {}
+                    except Exception as e: oprinter.oprint(f"[Error] Resolving SoundCloud URL failed: {e}"); data_dict = {}
+
+                album_info = None
+                try:
+                    if downloader.service_name == 'soundcloud':
+                        album_info = downloader.service.get_album_info(album_id=media_id, data=data_dict)
+                    elif downloader.service_name == 'deezer':
+                         album_info = downloader.service.get_album_info(album_id=media_id, data={})
+                    else:
+                        album_info = downloader.service.get_album_info(album_id=media_id)
+                except Exception as e:
+                     oprinter.oprint(f"[Error] Failed to get album info for {media_id}: {e}")
+
+                if album_info and album_info.tracks:
+                    num_tracks = len(album_info.tracks); output_queue.put(f"Starting album download: '{album_info.name}' ({num_tracks} tracks)\n")
+                    album_path = downloader._create_album_location(output_path, media_id, album_info); downloader.print(f'=== Downloading album {album_info.name} ({media_id}) ==='); downloader._download_album_files(album_path, album_info)
+                    for index, track_id in enumerate(album_info.tracks, start=1):
+                        if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before track {index}/{num_tracks}."); break
+                        output_queue.put("\n")
+                        downloader.set_indent_number(2); oprinter.oprint(f"Processing album track {index}/{num_tracks}: {track_id}")
+                        percentage = (index / num_tracks) * 100; output_queue.put(f"Progress: Track {index}/{num_tracks} ({percentage:.0f}%)"); output_queue.put('\n\n')
+                        downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=album_path, track_index=index, number_of_tracks=num_tracks, extra_kwargs=album_info.track_extra_kwargs, indent_level=2)
+                        output_queue.put('\n')
+                    downloader.set_indent_number(1)
+                else: oprinter.oprint(f"Could not retrieve album info or album is empty.")
+            elif media_type == DownloadTypeEnum.artist:
+                oprinter.oprint(f"Fetching artist info: {media_id}")
+                data_dict = {}; raw_result = search_result_data.get('raw_result') if search_result_data else None
+                if downloader.service_name == 'soundcloud':
+                    try:
+                        oprinter.oprint(f"Resolving SoundCloud URL for artist {media_id}...")
+                        resolved_data = downloader.service.websession.resolve_url(url)
+                        if resolved_data and resolved_data.get('id') == media_id: data_dict = {media_id: resolved_data}
+                        else: oprinter.oprint(f"[Warning] Failed to resolve SoundCloud URL or ID mismatch for {media_id}. Proceeding without pre-fetched data."); data_dict = {}
+                    except Exception as e: oprinter.oprint(f"[Error] Resolving SoundCloud URL failed: {e}"); data_dict = {}
+
+                artist_info = None
+                try:
+                    if downloader.service_name == 'soundcloud':
+                        artist_info = downloader.service.get_artist_info(artist_id=media_id, get_credited_albums=downloader_settings['artist_downloading']['return_credited_albums'], data=data_dict)
+                    else:
+                        artist_info = downloader.service.get_artist_info(artist_id=media_id, get_credited_albums=downloader_settings['artist_downloading']['return_credited_albums'])
+                except Exception as e:
+                     oprinter.oprint(f"[Error] Failed to get artist info for {media_id}: {e}")
+
+                if artist_info:
+                    artist_name = artist_info.name; oprinter.oprint(f"=== Downloading artist {artist_name} ({media_id}) ===")
+                    sanitized_artist_name = re.sub(r'[\\/:*?"<>|]', '_', artist_name).strip(); artist_path = os.path.join(output_path, sanitized_artist_name) + '/'; os.makedirs(artist_path, exist_ok=True)
+                    num_albums = len(artist_info.albums); tracks_downloaded_in_albums = []
+                    output_queue.put(f"Starting artist download: '{artist_name}' ({num_albums} albums + {len(artist_info.tracks)} potential tracks)\n")
+                    oprinter.oprint(f"Processing {num_albums} albums...")
+
+                    for index, album_id in enumerate(artist_info.albums, start=1):
+                        if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before album {index}/{num_albums}."); break
+                        output_queue.put("\n")
+                        oprinter.oprint(f"Processing album {index}/{num_albums}: {album_id}")
+                        data_dict_for_album = {}
+                        album_info_for_artist = None
+
+                        try:
+                            if downloader.service_name == 'soundcloud':
+                                try:
+                                    oprinter.oprint(f"  Fetching SoundCloud album metadata for {album_id}...")
+                                    fetched_album_data = downloader.service.websession._get(f'playlists/{album_id}')
+                                    if fetched_album_data: data_dict_for_album = {album_id: fetched_album_data}
+                                    else: oprinter.oprint(f"  [Warning] Could not fetch metadata for SoundCloud album {album_id}.")
+                                except Exception as e_sc_album: oprinter.oprint(f"  [Error] Fetching SoundCloud album metadata failed: {e_sc_album}")
+                                album_info_for_artist = downloader.service.get_album_info(album_id=album_id, data=data_dict_for_album)
+                            elif downloader.service_name == 'deezer':
+                                album_info_for_artist = downloader.service.get_album_info(album_id=album_id, data={})
+                            else:
+                                album_info_for_artist = downloader.service.get_album_info(album_id=album_id)
+                        except Exception as e_album_get:
+                            oprinter.oprint(f"Could not get info for album {album_id}, skipping. Error: {e_album_get}")
+                            continue
+
+                        if album_info_for_artist and album_info_for_artist.tracks:
+                             album_path = downloader._create_album_location(artist_path, album_id, album_info_for_artist); downloader._download_album_files(album_path, album_info_for_artist)
+                             num_album_tracks = len(album_info_for_artist.tracks); output_queue.put(f"Artist Progress: Album {index}/{num_albums} - '{album_info_for_artist.name}' ({num_album_tracks} tracks)\n")
+                             for track_index, track_id in enumerate(album_info_for_artist.tracks, start=1):
+                                 if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling during album '{album_info_for_artist.name}' before track {track_index}/{num_album_tracks}."); break
+                                 output_queue.put("\n")
+                                 downloader.set_indent_number(3); oprinter.oprint(f"Processing album track {track_index}/{num_album_tracks}: {track_id}")
+                                 track_percentage = (track_index / num_album_tracks) * 100; output_queue.put(f"  -> Album Track {track_index}/{num_album_tracks} ({track_percentage:.0f}%)"); output_queue.put('\n\n')
+                                 downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=album_path, track_index=track_index, number_of_tracks=num_album_tracks, main_artist=artist_name, extra_kwargs=album_info_for_artist.track_extra_kwargs, indent_level=3)
+                                 output_queue.put('\n'); tracks_downloaded_in_albums.append(str(track_id.id) if hasattr(track_id, 'id') else str(track_id))
+                             if is_cancelled: break
+                    if is_cancelled: pass
+                    elif not is_cancelled:
+                        skip_tracks = downloader_settings['artist_downloading']['separate_tracks_skip_downloaded']
+                        standalone_tracks = [tid_obj for tid_obj in artist_info.tracks if not skip_tracks or (str(tid_obj.id) if hasattr(tid_obj, 'id') else str(tid_obj)) not in tracks_downloaded_in_albums]; num_standalone = len(standalone_tracks)
+                        if num_standalone > 0:
+                            oprinter.oprint(f"Processing {num_standalone} standalone tracks..."); output_queue.put(f"Artist Progress: Processing {num_standalone} standalone tracks...\n")
+                            for index, track_id_obj in enumerate(standalone_tracks, start=1):
+                                if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before standalone track {index}/{num_standalone}."); break
+                                output_queue.put("\n")
+                                downloader.set_indent_number(2); oprinter.oprint(f"Processing standalone track {index}/{num_standalone}: {track_id_obj}")
+                                standalone_percentage = (index / num_standalone) * 100; output_queue.put(f"  -> Standalone Track {index}/{num_standalone} ({standalone_percentage:.0f}%)"); output_queue.put('\n\n')
+                                downloader.download_track(track_id=str(track_id_obj.id) if hasattr(track_id_obj, 'id') else str(track_id_obj), album_location=artist_path, main_artist=artist_name, number_of_tracks=1, indent_level=2, extra_kwargs=artist_info.track_extra_kwargs)
+                                output_queue.put('\n')
+                else: oprinter.oprint(f"Could not retrieve artist info.")
+            else: print(f"ERROR: Unknown media type '{media_type.name if hasattr(media_type, 'name') else media_type}' encountered.")
+
+            if is_cancelled: print("\nDownload Cancelled.")
+        except FileNotFoundError as fnf_e:
+            ffmpeg_path_setting = gui_settings.get("globals", {}).get("advanced", {}).get("ffmpeg_path", "ffmpeg").strip()
+            is_ffmpeg_error = False
+            if "ffmpeg" in str(fnf_e).lower() and \
+               (hasattr(fnf_e, 'errno') and fnf_e.errno == 2 or "No such file or directory" in str(fnf_e) or "The system cannot find the file specified" in str(fnf_e) or "cannot find" in str(fnf_e).lower()):
+                is_ffmpeg_error = True
+            
+            if is_ffmpeg_error:
+                download_exception_occurred = True
+                user_msg = (
+                    "\n[FFMPEG ERROR] FFmpeg was not found. This is required for audio conversion.\n\n"
+                    "Possible Solutions:\n"
+                    "1. Install FFmpeg: If not installed, download from ffmpeg.org and install it.\n"
+                    "2. Check PATH: Ensure the directory containing ffmpeg.exe (or ffmpeg) is in your system's PATH environment variable.\n"
+                    "3. or Configure in GUI: Go to Settings > Global > Advanced > FFmpeg Path, and set the full path to your ffmpeg executable.\n\n"
+                    f"Current FFmpeg Path setting in GUI: '{ffmpeg_path_setting}'\n\n"
+                    "Download process aborted."
+                )
+                output_queue.put(user_msg + "\n")
+            else:
+                raise fnf_e
 
     except (DownloadCancelledError, AuthenticationError, DownloadError, NetworkError, OrpheusdlError) as e:
         download_exception_occurred = True
