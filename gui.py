@@ -47,11 +47,17 @@ file_download_queue = []
 output_queue = queue.Queue()
 current_batch_output_path = None
 
+_queue_log_handler_instance = None
+
 class QueueLogHandler(logging.Handler):
     """A handler class which sends records to a queue."""
     def __init__(self, log_queue):
         super().__init__()
         self.log_queue = log_queue
+        self.reset_ffmpeg_state_for_current_download()
+
+    def reset_ffmpeg_state_for_current_download(self):
+        self._specific_ffmpeg_hls_error_logged_this_download = False
 
     def emit(self, record):
         import re
@@ -63,15 +69,42 @@ class QueueLogHandler(logging.Handler):
             self.log_queue.put(log_entry)
             return
         if record.levelno < logging.WARNING:
-            return        
+            return
+
+        msg_content = record.getMessage()
+        hls_ffmpeg_warning_pattern = r"soundcloud --> HLS_UNEXPECTED_ERROR_IN_TRY_BLOCK: \[(WinError 2|Errno 2)\] (The system cannot find the file specified|No such file or directory)"
+        is_primary_hls_ffmpeg_warning = (
+            record.levelname == 'WARNING' and
+            "Track download attempt" in msg_content and
+            "failed for" in msg_content and
+            re.search(hls_ffmpeg_warning_pattern, msg_content)
+        )
+
+        if is_primary_hls_ffmpeg_warning:
+            if not self._specific_ffmpeg_hls_error_logged_this_download:
+                self._specific_ffmpeg_hls_error_logged_this_download = True
+                ffmpeg_path_setting = current_settings.get("globals", {}).get("advanced", {}).get("ffmpeg_path", "ffmpeg").strip()
+                user_friendly_ffmpeg_msg = (
+                    "\n[FFMPEG ERROR] FFmpeg was not found or is misconfigured. This is required for audio conversion (e.g., SoundCloud HLS streams).\n\n"
+                    "Possible Solutions:\n"
+                    "1. Install FFmpeg: If not installed, download from ffmpeg.org and install it.\n"
+                    "2. Check PATH: Ensure the directory containing ffmpeg.exe (or ffmpeg) is in your system's PATH environment variable.\n"
+                    "3. Configure in GUI: Go to Settings > Global > Advanced > FFmpeg Path, and set the full path to your ffmpeg executable.\n\n"
+                    f"Current FFmpeg Path setting in GUI: '{ffmpeg_path_setting}'\n\n"
+                    "Download process aborted due to FFmpeg issue."
+                )
+                self.log_queue.put(user_friendly_ffmpeg_msg + '\n')
+            return
+        if self._specific_ffmpeg_hls_error_logged_this_download:
+            if record.levelname == 'ERROR' and "Failed after 3 attempts" in msg_content:
+                return
         is_beatsource_404_warning = (
             record.name == 'root' and
             record.levelname == 'WARNING' and
-            "Fetching as playlist failed (404)" in record.getMessage()
+            "Fetching as playlist failed (404)" in msg_content
         )
         if is_beatsource_404_warning:
             return
-        msg_content = record.getMessage()        
         
         if "Librespot:AudioKeyManager" in record.name and "Audio key error" in msg_content:
             return            
@@ -85,10 +118,8 @@ class QueueLogHandler(logging.Handler):
            record.levelname == 'ERROR' and \
            msg_content.startswith("GLOBAL_PATCH_DEBUG: Unexpected generic exception during Librespot session creation: [Errno 61] Connection refused"):
             return
-        
-        cleaned_msg = self.format(record)
+        cleaned_msg = self.format(record) 
         cleaned_msg = re.sub(r' - \w+ - ', ' - ', cleaned_msg)
-        
         if "Track download attempt" in cleaned_msg and "failed for" in cleaned_msg:            
             attempt_match = re.search(r'Track download attempt (\d+) failed for \w+\. Retrying in (\d+) seconds', cleaned_msg)
             if attempt_match:
@@ -108,16 +139,25 @@ class QueueLogHandler(logging.Handler):
         log_entry = f"[{record.levelname}] {cleaned_msg}\n"
         self.log_queue.put(log_entry)
 
+    def flush(self):
+        pass
+    def readable(self):
+        return False
+    def seekable(self):
+        return False
+    def writable(self):
+        return True
+    
 def setup_logging(log_queue):
-    global current_settings
+    global current_settings, _queue_log_handler_instance
 
     root_logger = logging.getLogger()
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
-    queue_handler = QueueLogHandler(log_queue)
+    _queue_log_handler_instance = QueueLogHandler(log_queue)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(message)s', datefmt='%H:%M:%S')
-    queue_handler.setFormatter(formatter)
-    root_logger.addHandler(queue_handler)
+    _queue_log_handler_instance.setFormatter(formatter)
+    root_logger.addHandler(_queue_log_handler_instance)
     root_logger.setLevel(logging.INFO) 
     if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
         logging.info("Logging configured to use GUI queue.")
@@ -1285,10 +1325,13 @@ def _check_and_toggle_text_scrollbar(text_widget, scrollbar_widget):
             print(f"Error checking/toggling text scrollbar: {e}")
 
 class QueueWriter(io.TextIOBase):
-    def __init__(self, queue_instance): self.queue = queue_instance
+    def __init__(self, queue_instance):
+        self.queue = queue_instance
 
     def write(self, msg):
         msg_strip = msg.lstrip()
+        if "[Music Downloader] force_album_format is ON, but no valid album_info found for track" in msg_strip and "album_id: ''" in msg_strip:
+            return len(msg)
         beatsource_patterns = [
             r"^Attempting login via https://api\.beatsource\.com/v4/auth/login/",
             r"^Login successful, obtained session ID\.",
@@ -1314,13 +1357,9 @@ class QueueWriter(io.TextIOBase):
         
         if "Spotify authentication error during track download:" in msg_strip:
             return len(msg)
-        
         if msg_strip.startswith("Download attempt ") and "failed. Retrying in" in msg_strip:
             return len(msg)
         
-        if "[Music Downloader] force_album_format is ON, but no valid album_info found for track" in msg_strip and "album_id: ''" in msg_strip:
-            return len(msg)
-
         is_fetching_line = False
         if msg_strip.startswith("Fetching "):
             parts = msg_strip.split(None, 1)
@@ -1348,7 +1387,13 @@ class QueueWriter(io.TextIOBase):
                        final_msg = "[INFO] Track file already exists"
                    elif "Pausing for" in final_msg and "before next download attempt" in final_msg:
                        self.queue.put('\n')
-                   self.queue.put(final_msg + '\n')
+                   global _queue_log_handler_instance
+                   if final_msg == "=== Track failed ===" and \
+                      _queue_log_handler_instance and \
+                      _queue_log_handler_instance._specific_ffmpeg_hls_error_logged_this_download:
+                       self.queue.put("=== Track failed (due to FFmpeg issue reported above) ===\n")
+                   else:
+                       self.queue.put(final_msg + '\n')
 
         return len(msg)
 
@@ -1363,7 +1408,9 @@ class QueueWriter(io.TextIOBase):
     
 def run_download_in_thread(orpheus, url, output_path, gui_settings, search_result_data=None):
     """Runs the download using the provided global Orpheus instance."""
-    global output_queue, stop_event, app, download_process_active, DEFAULT_SETTINGS
+    global output_queue, stop_event, app, download_process_active, DEFAULT_SETTINGS, _queue_log_handler_instance
+    if _queue_log_handler_instance:
+        _queue_log_handler_instance.reset_ffmpeg_state_for_current_download()
 
     if orpheus is None:
         logging.error("Orpheus instance not available. Cannot start download.")
@@ -1686,18 +1733,16 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         download_exception_occurred = True
         error_type = type(e).__name__; error_repr = repr(e)
         tb_str_generic = traceback.format_exc()
+        tb_str_generic_lower = tb_str_generic.lower()
 
         is_soundcloud_hls_ffmpeg_issue = False
-        error_repr_lower = error_repr.lower()
-        sc_hls_signature_present = "soundcloud" in error_repr_lower and \
-                                   "hls_unexpected_error_in_try_block" in error_repr_lower and \
-                                   ("[winerror 2]" in error_repr_lower or \
-                                    "no such file or directory" in error_repr_lower or \
-                                    "system cannot find the file specified" in error_repr_lower)
-
-        if sc_hls_signature_present:
-            if "ffmpeg" in tb_str_generic.lower():
-                 is_soundcloud_hls_ffmpeg_issue = True
+        if ("soundcloud" in tb_str_generic_lower and
+            "hls_unexpected_error_in_try_block" in tb_str_generic_lower and
+            "ffmpeg" in tb_str_generic_lower and
+            ("[winerror 2]" in tb_str_generic_lower or
+             "no such file or directory" in tb_str_generic_lower or
+             "system cannot find the file specified" in tb_str_generic_lower)):
+            is_soundcloud_hls_ffmpeg_issue = True
 
         if is_soundcloud_hls_ffmpeg_issue:
             ffmpeg_path_setting = gui_settings.get("globals", {}).get("advanced", {}).get("ffmpeg_path", "ffmpeg").strip()
@@ -1716,6 +1761,8 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
     finally:
         end_time = datetime.datetime.now(); total_duration = end_time - start_time; formatted_time = beauty_format_seconds(total_duration.total_seconds())
         time_taken_message = f"Total time taken: {formatted_time}\n"
+        if _queue_log_handler_instance and _queue_log_handler_instance._specific_ffmpeg_hls_error_logged_this_download:
+            download_exception_occurred = True
 
         if is_cancelled:            
             pass
