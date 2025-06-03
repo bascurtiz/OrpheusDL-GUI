@@ -302,6 +302,32 @@ os.get_terminal_size = _patched_get_terminal_size
 try:
     print("[Patch] Applied os.get_terminal_size monkey-patch.", file=sys.stderr)
 except Exception: pass
+if platform.system() == "Windows":
+    import subprocess
+    _original_popen = subprocess.Popen
+    
+    def _patched_popen(*args, **kwargs):
+        """Patched subprocess.Popen to suppress console windows on Windows."""
+        try:
+            if 'creationflags' not in kwargs:
+                kwargs['creationflags'] = 0
+            kwargs['creationflags'] |= subprocess.CREATE_NO_WINDOW
+            if 'startupinfo' not in kwargs:
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                kwargs['startupinfo'] = startupinfo
+                
+        except Exception as e:
+            print(f"[Patch Warning] Could not set subprocess flags to hide console: {e}", file=sys.stderr)
+        
+        return _original_popen(*args, **kwargs)
+    
+    subprocess.Popen = _patched_popen
+    try:
+        print("[Patch] Applied subprocess.Popen patch to suppress console windows on Windows.", file=sys.stderr)
+    except Exception: pass
+
 try:
     from customtkinter.windows.widgets import CTkEntry, CTkCheckBox, CTkComboBox
     import tkinter
