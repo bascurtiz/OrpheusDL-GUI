@@ -1647,7 +1647,6 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         except FileNotFoundError as fnf_e:
             ffmpeg_path_setting = gui_settings.get("globals", {}).get("advanced", {}).get("ffmpeg_path", "ffmpeg").strip()
             is_ffmpeg_error = False
-            import traceback
             tb_str = traceback.format_exc()
             if "ffmpeg" in tb_str.lower():
                 is_ffmpeg_error = True
@@ -1670,7 +1669,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                     f"Current FFmpeg Path setting in GUI: '{ffmpeg_path_setting}'\n\n"
                     "Download process aborted."
                 )
-                output_queue.put(user_msg + "\n")
+                print(user_msg + "\n")
             else:
                 raise fnf_e
 
@@ -1682,8 +1681,35 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         else: error_type = type(e).__name__; print(f"\nERROR: {error_type}.\nDetails: {e}\n")
     except Exception as e:
         download_exception_occurred = True
-        error_type = type(e).__name__; error_repr = repr(e); import traceback; tb_str = traceback.format_exc()
-        print(f"\nUNEXPECTED ERROR during download thread.\nType: {error_type}\nDetails: {error_repr}\nTraceback:\n{tb_str}")
+        error_type = type(e).__name__; error_repr = repr(e)
+        tb_str_generic = traceback.format_exc()
+
+        is_soundcloud_hls_ffmpeg_issue = False
+        error_repr_lower = error_repr.lower()
+        sc_hls_signature_present = "soundcloud" in error_repr_lower and \
+                                   "hls_unexpected_error_in_try_block" in error_repr_lower and \
+                                   ("[winerror 2]" in error_repr_lower or \
+                                    "no such file or directory" in error_repr_lower or \
+                                    "system cannot find the file specified" in error_repr_lower)
+
+        if sc_hls_signature_present:
+            if "ffmpeg" in tb_str_generic.lower():
+                 is_soundcloud_hls_ffmpeg_issue = True
+
+        if is_soundcloud_hls_ffmpeg_issue:
+            ffmpeg_path_setting = gui_settings.get("globals", {}).get("advanced", {}).get("ffmpeg_path", "ffmpeg").strip()
+            user_msg = (
+                "\n[FFMPEG ERROR - SoundCloud HLS] FFmpeg was not found or is misconfigured.\nThis is required for processing SoundCloud HLS streams.\n\n"
+                "Possible Solutions:\n"
+                "1. Install FFmpeg: If not installed, download from ffmpeg.org and install it.\n"
+                "2. Check PATH: Ensure the directory containing ffmpeg.exe (or ffmpeg) is in your system's PATH environment variable.\n"
+                "3. Configure in GUI: Go to Settings > Global > Advanced > FFmpeg Path, and set the full path to your ffmpeg executable.\n\n"
+                f"Current FFmpeg Path setting in GUI: '{ffmpeg_path_setting}'\n\n"
+                "Download process aborted."
+            )
+            print(user_msg + "\n")
+        else:
+            print(f"\nUNEXPECTED ERROR during download thread.\nType: {error_type}\nDetails: {error_repr}\nTraceback:\n{tb_str_generic}")
     finally:
         end_time = datetime.datetime.now(); total_duration = end_time - start_time; formatted_time = beauty_format_seconds(total_duration.total_seconds())
         time_taken_message = f"Total time taken: {formatted_time}\n"
