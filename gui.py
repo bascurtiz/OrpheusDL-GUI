@@ -1647,9 +1647,17 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         except FileNotFoundError as fnf_e:
             ffmpeg_path_setting = gui_settings.get("globals", {}).get("advanced", {}).get("ffmpeg_path", "ffmpeg").strip()
             is_ffmpeg_error = False
-            if "ffmpeg" in str(fnf_e).lower() and \
-               (hasattr(fnf_e, 'errno') and fnf_e.errno == 2 or "No such file or directory" in str(fnf_e) or "The system cannot find the file specified" in str(fnf_e) or "cannot find" in str(fnf_e).lower()):
+            import traceback
+            tb_str = traceback.format_exc()
+            if "ffmpeg" in tb_str.lower():
                 is_ffmpeg_error = True
+            elif "ffmpeg" in str(fnf_e).lower():
+                is_ffmpeg_error = True
+            elif platform.system() == "Windows" and hasattr(fnf_e, 'winerror') and fnf_e.winerror == 2:
+                is_ffmpeg_error = True
+            elif any(phrase in str(fnf_e).lower() for phrase in ["no such file or directory", "the system cannot find the file specified", "cannot find"]):
+                if hasattr(fnf_e, 'errno') and fnf_e.errno == 2:
+                    is_ffmpeg_error = True
             
             if is_ffmpeg_error:
                 download_exception_occurred = True
