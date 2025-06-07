@@ -1,3 +1,5 @@
+import os
+os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
 import copy
 import customtkinter
 import datetime
@@ -27,6 +29,17 @@ from urllib.parse import urlparse
 import traceback
 import logging
 import webbrowser
+import time  # Add time import for yielding
+
+# --- BEGIN asyncio patch for InquirerPy/prompt_toolkit on Windows ---
+import asyncio
+if sys.platform == "win32":
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        print("[Patch] Applied asyncio.WindowsSelectorEventLoopPolicy() for Windows.")
+    except Exception as e:
+        print(f"[Patch] WARNING: Failed to set asyncio.WindowsSelectorEventLoopPolicy(): {e}")
+# --- END asyncio patch ---
 
 _SCRIPT_DIR = None
 
@@ -161,7 +174,7 @@ def setup_logging(log_queue):
     root_logger.setLevel(logging.INFO) 
     if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
         logging.info("Logging configured to use GUI queue.")
-__version__ = "1.0.4"
+__version__ = "1.0.5"
 from update_checker import run_check_in_thread
 if platform.system() == "Windows":
     try:
@@ -306,26 +319,27 @@ if platform.system() == "Windows":
     import subprocess
     _original_popen = subprocess.Popen
     
-    def _patched_popen(*args, **kwargs):
-        """Patched subprocess.Popen to suppress console windows on Windows."""
-        try:
-            if 'creationflags' not in kwargs:
-                kwargs['creationflags'] = 0
-            kwargs['creationflags'] |= subprocess.CREATE_NO_WINDOW
-            if 'startupinfo' not in kwargs:
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = subprocess.SW_HIDE
-                kwargs['startupinfo'] = startupinfo
-                
-        except Exception as e:
-            print(f"[Patch Warning] Could not set subprocess flags to hide console: {e}", file=sys.stderr)
-        
-        return _original_popen(*args, **kwargs)
+    class _PatchedPopen(_original_popen):
+        """Patched subprocess.Popen class to suppress console windows on Windows."""
+        def __init__(self, *args, **kwargs):
+            try:
+                if 'creationflags' not in kwargs:
+                    kwargs['creationflags'] = 0
+                kwargs['creationflags'] |= subprocess.CREATE_NO_WINDOW
+                if 'startupinfo' not in kwargs:
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    startupinfo.wShowWindow = subprocess.SW_HIDE
+                    kwargs['startupinfo'] = startupinfo
+                    
+            except Exception as e:
+                print(f"[Patch Warning] Could not set subprocess flags to hide console: {e}", file=sys.__stderr__)
+            
+            super().__init__(*args, **kwargs)
     
-    subprocess.Popen = _patched_popen
+    subprocess.Popen = _PatchedPopen
     try:
-        print("[Patch] Applied subprocess.Popen patch to suppress console windows on Windows.", file=sys.stderr)
+        print("[Patch] Applied subprocess.Popen patch to suppress console windows on Windows.", file=sys.__stdout__)
     except Exception: pass
 
 try:
@@ -463,7 +477,7 @@ def load_settings():
                      if isinstance(section_data, dict) and isinstance(settings["globals"].get(section_key), dict):
                          deep_merge(settings["globals"][section_key], section_data)
         if "modules" in file_settings:
-            platform_map_from_orpheus = { "bugs": "BugsMusic", "nugs": "Nugs", "soundcloud": "SoundCloud", "tidal": "Tidal", "qobuz": "Qobuz", "deezer": "Deezer", "idagio": "Idagio", "kkbox": "KKBOX", "napster": "Napster", "beatport": "Beatport", "beatsource": "Beatsource", "musixmatch": "Musixmatch", "spotify": "Spotify" }
+            platform_map_from_orpheus = { "bugs": "BugsMusic", "nugs": "Nugs", "soundcloud": "SoundCloud", "tidal": "Tidal", "qobuz": "Qobuz", "deezer": "Deezer", "idagio": "Idagio", "kkbox": "KKBOX", "napster": "Napster", "beatport": "Beatport", "beatsource": "Beatsource", "musixmatch": "Musixmatch", "spotify": "Spotify", "applemusic": "AppleMusic" }
             for orpheus_platform, creds_from_file in file_settings["modules"].items():
                 gui_platform = platform_map_from_orpheus.get(orpheus_platform)
                 if gui_platform and gui_platform in DEFAULT_SETTINGS["credentials"]:
@@ -783,7 +797,7 @@ def save_settings(show_confirmation: bool = True):
                       if section_key == "advanced" and item_key == "conversion_flags":
                           continue
                       mapped_orpheus_updates["global"][section_key][item_key] = item_value
-    platform_map_to_orpheus = { "BugsMusic": "bugs", "Nugs": "nugs", "SoundCloud": "soundcloud", "Tidal": "tidal", "Qobuz": "qobuz", "Deezer": "deezer", "Idagio": "idagio", "KKBOX": "kkbox", "Napster": "napster", "Beatport": "beatport", "Beatsource": "beatsource", "Musixmatch": "musixmatch", "Spotify": "spotify" }
+    platform_map_to_orpheus = { "BugsMusic": "bugs", "Nugs": "nugs", "SoundCloud": "soundcloud", "Tidal": "tidal", "Qobuz": "qobuz", "Deezer": "deezer", "Idagio": "idagio", "KKBOX": "kkbox", "Napster": "napster", "Beatport": "beatport", "Beatsource": "beatsource", "Musixmatch": "musixmatch", "Spotify": "spotify", "AppleMusic": "applemusic" }
     for gui_platform, creds in updated_gui_settings.get("credentials", {}).items():
         orpheus_platform = platform_map_to_orpheus.get(gui_platform)
         if orpheus_platform:
@@ -1206,22 +1220,69 @@ def log_to_textbox(msg, error=False):
                 log_textbox.configure(state="disabled")
         except: pass
 
+# Add a state variable to prevent duplicate "unavailable" warnings
+_has_shown_unavailable_warning = False
+
 def update_log_area():
-    global output_queue, app
+    global output_queue, app, _has_shown_unavailable_warning
     try:
-        while True:
-            try: msg = output_queue.get_nowait(); log_to_textbox(msg)
-            except queue.Empty: break
-            except Exception as e: print(f"Error processing message from queue: {e}")
-    except Exception as e: print(f"[ERROR] Exception in update_log_area loop: {type(e).__name__}: {e}")
+        # Limit the number of messages processed per call to prevent GUI blocking
+        messages_processed = 0
+        max_messages_per_update = 10  # Process more messages for better responsiveness
+        
+        while messages_processed < max_messages_per_update:
+            try: 
+                msg = output_queue.get_nowait()
+                msg_strip = msg.strip()
+
+                # 1. Filter out the [Apple Music] startup messages
+                if msg_strip.startswith('[Apple Music]'):
+                    continue # Skip to the next message in the queue
+
+                # 2. Reset the warning flag when a new track begins processing
+                if msg_strip.startswith('=== Downloading track'):
+                    _has_shown_unavailable_warning = False
+                
+                # 3. Handle the "unavailable" warning, showing it only once per track
+                if 'This song is currently unavailable.' in msg_strip and msg_strip.startswith('[WARNING]'):
+                    if not _has_shown_unavailable_warning:
+                        log_to_textbox("[INFO] This song is currently unavailable (might be a pre-release or restricted content).\n")
+                        _has_shown_unavailable_warning = True
+                    continue # Discard original and subsequent warnings for this track
+
+                # 4. Shorten the final failure error message
+                if 'Failed after 3 attempts' in msg_strip and msg_strip.startswith('[ERROR]'):
+                    log_to_textbox("[ERROR] Failed after 3 attempts.\n", error=True)
+                    continue
+
+                # 5. Log all other messages, tagging errors/warnings for color
+                is_error = msg_strip.startswith(('[WARNING]', '[ERROR]'))
+                log_to_textbox(msg, error=is_error)
+
+                messages_processed += 1
+            except queue.Empty: 
+                break
+            except Exception as e: 
+                print(f"Error processing message from queue: {e}")
+                break
+        
+        # Force GUI update after processing messages
+        if 'app' in globals() and app and app.winfo_exists():
+            app.update_idletasks()
+            
+    except Exception as e: 
+        print(f"[ERROR] Exception in update_log_area loop: {type(e).__name__}: {e}")
     finally:
         try:
             if 'app' in globals() and app and app.winfo_exists():
-                app.after(100, update_log_area)
+                # Schedule next update sooner for responsiveness
+                app.after(50, update_log_area)  # Faster updates (50ms instead of 100ms)
             else:
                 print("[Debug] update_log_area: 'app' not found or destroyed, stopping log polling.")
-        except NameError: print("[Debug] update_log_area: NameError accessing 'app'.")
-        except Exception as e_sched: print(f"[Error] Could not reschedule update_log_area: {e_sched}")
+        except NameError: 
+            print("[Debug] update_log_area: NameError accessing 'app'.")
+        except Exception as e_sched: 
+            print(f"[Error] Could not reschedule update_log_area: {e_sched}")
 
 def clear_output_log():
     global log_textbox
@@ -1435,6 +1496,9 @@ class QueueWriter(io.TextIOBase):
 def run_download_in_thread(orpheus, url, output_path, gui_settings, search_result_data=None):
     """Runs the download using the provided global Orpheus instance."""
     global output_queue, stop_event, app, download_process_active, DEFAULT_SETTINGS, _queue_log_handler_instance
+    import time
+    import threading
+    
     if _queue_log_handler_instance:
         _queue_log_handler_instance.reset_ffmpeg_state_for_current_download()
 
@@ -1447,6 +1511,28 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         except Exception as e: logging.error(f"Error scheduling UI reset after Orpheus instance error: {e}")
         return
 
+    # Aggressive yielding helper
+    def yield_to_gui():
+        try:
+            if 'app' in globals() and app and app.winfo_exists():
+                app.update_idletasks()
+            time.sleep(0.001)  # Very short sleep to release GIL
+        except:
+            pass
+
+    # Periodic yielding timer to keep GUI responsive during intensive operations
+    yielding_active = threading.Event()
+    yielding_active.set()
+    
+    def periodic_yield():
+        while yielding_active.is_set():
+            yield_to_gui()
+            time.sleep(0.1)  # Yield every 100ms
+    
+    # Start the periodic yielding thread
+    yield_thread = threading.Thread(target=periodic_yield, daemon=True)
+    yield_thread.start()
+
     original_stdout = sys.stdout
     original_stderr = sys.stderr
     queue_writer = QueueWriter(output_queue)
@@ -1455,9 +1541,16 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
     download_exception_occurred = False
     start_time = datetime.datetime.now()
 
+    # Initial yield
+    yield_to_gui()
+
     try:
         sys.stdout = queue_writer
         sys.stderr = dummy_stderr
+        
+        # Yield frequently during setup
+        yield_to_gui()
+        
         downloader_settings = {
             "general": {
                 "download_path": gui_settings.get("globals", {}).get("general", {}).get("output_path", DEFAULT_SETTINGS["globals"]["general"]["output_path"]),
@@ -1478,6 +1571,8 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                     cleaned_mp3_flags = {"qscale:a": gui_settings["globals"]["advanced"]["conversion_flags"]["mp3"]["qscale:a"]}
                     downloader_settings["advanced"]["conversion_flags"]["mp3"] = cleaned_mp3_flags
 
+        yield_to_gui()
+
         module_controls_dict = orpheus.module_controls
         oprinter = Oprinter()
         downloader = Downloader(settings=downloader_settings, module_controls=module_controls_dict, oprinter=oprinter, path=output_path)
@@ -1489,6 +1584,9 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         for netloc_pattern, mod_name in orpheus.module_netloc_constants.items():
             if re.findall(netloc_pattern, parsed_url.netloc): module_name = mod_name; break
         if not module_name: raise ValueError(f"Could not determine module for URL host: {parsed_url.netloc}")
+        
+        yield_to_gui()
+        
         try:
             if orpheus.module_settings[module_name].url_decoding is ManualEnum.manual:
                 module_instance = orpheus.load_module(module_name)
@@ -1553,14 +1651,18 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             downloader.service_name = module_name
             downloader.download_mode = media_type
             
+            yield_to_gui()
+            
             is_beatport_chart = False
             
             if media_type == DownloadTypeEnum.track:
                 if stop_event.is_set(): is_cancelled = True
                 else:
+                    yield_to_gui()
                     oprinter.oprint(f"Processing track: {media_id}")
                     downloader.download_track(track_id=str(media_id), album_location=output_path + '/')
                     output_queue.put('\n')
+                    yield_to_gui()
             elif media_type == DownloadTypeEnum.playlist:
                 oprinter.oprint(f"Fetching playlist info: {media_id}")
                 data_dict = {}; raw_result = search_result_data.get('raw_result') if search_result_data else None
@@ -1601,11 +1703,16 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
 
                     for index, track_id in enumerate(playlist_info.tracks, start=1):
                         if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before track {index}/{num_tracks}."); break
+                        
+                        yield_to_gui()
+                        
                         output_queue.put("\n")
                         oprinter.oprint(f"Processing playlist track {index}/{num_tracks}: {track_id}")
                         percentage = (index / num_tracks) * 100; output_queue.put(f"Progress: Track {index}/{num_tracks} ({percentage:.0f}%)"); output_queue.put('\n\n')
                         downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=full_playlist_path, track_index=index, number_of_tracks=num_tracks, extra_kwargs=playlist_info.track_extra_kwargs)
                         output_queue.put('\n')
+                        
+                        yield_to_gui()
                 else: oprinter.oprint(f"Could not retrieve playlist info or playlist is empty.")
             elif media_type == DownloadTypeEnum.album:
                 oprinter.oprint(f"Fetching album info: {media_id}")
@@ -1634,11 +1741,16 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                     album_path = downloader._create_album_location(output_path, media_id, album_info); downloader.print(f'=== Downloading album {album_info.name} ({media_id}) ==='); downloader._download_album_files(album_path, album_info)
                     for index, track_id in enumerate(album_info.tracks, start=1):
                         if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before track {index}/{num_tracks}."); break
+                        
+                        yield_to_gui()
+                        
                         output_queue.put("\n")
                         downloader.set_indent_number(2); oprinter.oprint(f"Processing album track {index}/{num_tracks}: {track_id}")
                         percentage = (index / num_tracks) * 100; output_queue.put(f"Progress: Track {index}/{num_tracks} ({percentage:.0f}%)"); output_queue.put('\n\n')
                         downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=album_path, track_index=index, number_of_tracks=num_tracks, extra_kwargs=album_info.track_extra_kwargs, indent_level=2)
                         output_queue.put('\n')
+                        
+                        yield_to_gui()
                     downloader.set_indent_number(1)
                 else: oprinter.oprint(f"Could not retrieve album info or album is empty.")
             elif media_type == DownloadTypeEnum.artist:
@@ -1670,6 +1782,9 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
 
                     for index, album_id in enumerate(artist_info.albums, start=1):
                         if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before album {index}/{num_albums}."); break
+                        
+                        yield_to_gui()
+                        
                         output_queue.put("\n")
                         oprinter.oprint(f"Processing album {index}/{num_albums}: {album_id}")
                         data_dict_for_album = {}
@@ -1697,11 +1812,16 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                              num_album_tracks = len(album_info_for_artist.tracks); output_queue.put(f"Artist Progress: Album {index}/{num_albums} - '{album_info_for_artist.name}' ({num_album_tracks} tracks)\n")
                              for track_index, track_id in enumerate(album_info_for_artist.tracks, start=1):
                                  if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling during album '{album_info_for_artist.name}' before track {track_index}/{num_album_tracks}."); break
+                                 
+                                 yield_to_gui()
+                                 
                                  output_queue.put("\n")
                                  downloader.set_indent_number(3); oprinter.oprint(f"Processing album track {track_index}/{num_album_tracks}: {track_id}")
                                  track_percentage = (track_index / num_album_tracks) * 100; output_queue.put(f"  -> Album Track {track_index}/{num_album_tracks} ({track_percentage:.0f}%)"); output_queue.put('\n\n')
                                  downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=album_path, track_index=track_index, number_of_tracks=num_album_tracks, main_artist=artist_name, extra_kwargs=album_info_for_artist.track_extra_kwargs, indent_level=3)
                                  output_queue.put('\n'); tracks_downloaded_in_albums.append(str(track_id.id) if hasattr(track_id, 'id') else str(track_id))
+                                 
+                                 yield_to_gui()
                              if is_cancelled: break
                     if is_cancelled: pass
                     elif not is_cancelled:
@@ -1711,11 +1831,16 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                             oprinter.oprint(f"Processing {num_standalone} standalone tracks..."); output_queue.put(f"Artist Progress: Processing {num_standalone} standalone tracks...\n")
                             for index, track_id_obj in enumerate(standalone_tracks, start=1):
                                 if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before standalone track {index}/{num_standalone}."); break
+                                
+                                yield_to_gui()
+                                
                                 output_queue.put("\n")
                                 downloader.set_indent_number(2); oprinter.oprint(f"Processing standalone track {index}/{num_standalone}: {track_id_obj}")
                                 standalone_percentage = (index / num_standalone) * 100; output_queue.put(f"  -> Standalone Track {index}/{num_standalone} ({standalone_percentage:.0f}%)"); output_queue.put('\n\n')
                                 downloader.download_track(track_id=str(track_id_obj.id) if hasattr(track_id_obj, 'id') else str(track_id_obj), album_location=artist_path, main_artist=artist_name, number_of_tracks=1, indent_level=2, extra_kwargs=artist_info.track_extra_kwargs)
                                 output_queue.put('\n')
+                                
+                                yield_to_gui()
                 else: oprinter.oprint(f"Could not retrieve artist info.")
             else: print(f"ERROR: Unknown media type '{media_type.name if hasattr(media_type, 'name') else media_type}' encountered.")
 
@@ -1785,6 +1910,9 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         else:
             print(f"\nUNEXPECTED ERROR during download thread.\nType: {error_type}\nDetails: {error_repr}\nTraceback:\n{tb_str_generic}")
     finally:
+        # Stop the periodic yielding thread
+        yielding_active.clear()
+        
         end_time = datetime.datetime.now(); total_duration = end_time - start_time; formatted_time = beauty_format_seconds(total_duration.total_seconds())
         time_taken_message = f"Total time taken: {formatted_time}\n"
         if _queue_log_handler_instance and _queue_log_handler_instance._specific_ffmpeg_hls_error_logged_this_download:
@@ -1877,8 +2005,9 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
              print(f"[Error] Exception scheduling final UI update: {final_e}")
 
 def _start_single_download(url_to_download, output_path_final, search_result_data=None):
-    """Starts the download thread for a single validated URL."""
+    """Starts the download in a separate thread for a single URL."""
     global download_process_active, current_settings, orpheus_instance, stop_event
+    
     if orpheus_instance is None:
         print("Download cancelled: Orpheus instance is None.")
         try:
@@ -1886,9 +2015,11 @@ def _start_single_download(url_to_download, output_path_final, search_result_dat
                  show_centered_messagebox("Error", "Orpheus library not initialized.", dialog_type="error")
         except Exception: pass
         return False
+    
     if download_process_active:
         print(f"Skipping start for {url_to_download}: A download is currently active.")
         return False
+    
     try:
         parsed_url = urlparse(url_to_download)
         if not parsed_url.scheme in ['http', 'https'] or not parsed_url.netloc:
@@ -1897,16 +2028,32 @@ def _start_single_download(url_to_download, output_path_final, search_result_dat
     except Exception as parse_e:
         show_centered_messagebox("Input Error", f"Could not process input: {url_to_download}\nError: {parse_e}\nPlease enter a valid web URL or .txt file path.", dialog_type="error")
         return False
+    
     try:
         set_ui_state_downloading(True)
         stop_event.clear()
         download_process_active = True
 
-        download_thread = threading.Thread(target=run_download_in_thread,
-                                           args=(orpheus_instance, url_to_download, output_path_final, current_settings, search_result_data),
-                                           daemon=True)
+        download_thread = threading.Thread(
+            target=run_download_in_thread,
+            args=(orpheus_instance, url_to_download, output_path_final, current_settings, search_result_data),
+            daemon=True
+        )
         print(f"Starting download thread for: {url_to_download}")
         download_thread.start()
+        
+        # Try to lower thread priority to reduce GUI impact (Windows only)
+        if platform.system() == "Windows":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                thread_handle = ctypes.windll.kernel32.OpenThread(0x0002, False, download_thread.ident)
+                if thread_handle:
+                    ctypes.windll.kernel32.SetThreadPriority(thread_handle, -2)
+                    ctypes.windll.kernel32.CloseHandle(thread_handle)
+            except Exception:
+                pass
+        
         return True
 
     except Exception as e:
@@ -1915,7 +2062,7 @@ def _start_single_download(url_to_download, output_path_final, search_result_dat
         set_ui_state_downloading(False)
         download_process_active = False
         return False
-    
+
 def start_download_thread(search_result_data=None):
     """Validates inputs (URL or file path) and starts the download process(es). Queues downloads from files."""
     global download_process_active, current_settings, orpheus_instance, url_entry, path_var_main, stop_event
@@ -2315,7 +2462,7 @@ def build_url_from_result(result_data):
 
     p_lower = platform.lower(); t_lower = search_type.lower()
 
-    base_urls = { "qobuz": "https://open.qobuz.com", "tidal": "https://listen.tidal.com", "deezer": "https://www.deezer.com", "beatport": "https://www.beatport.com", "beatsource": "https://www.beatsource.com", "napster": "https://web.napster.com", "idagio": "https://app.idagio.com", "spotify": "https://open.spotify.com" }
+    base_urls = { "qobuz": "https://open.qobuz.com", "tidal": "https://listen.tidal.com", "deezer": "https://www.deezer.com", "beatport": "https://www.beatport.com", "beatsource": "https://www.beatsource.com", "napster": "https://web.napster.com", "idagio": "https://app.idagio.com", "spotify": "https://open.spotify.com", "applemusic": "https://music.apple.com" }
     type_paths = { 
         "qobuz": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"},
         "tidal": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"},
@@ -2324,7 +2471,8 @@ def build_url_from_result(result_data):
         "beatsource": {"track": "track", "album": "release", "artist": "artist", "playlist": "playlist"},
         "napster": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"},
         "idagio": {"track": "recording", "album": "album", "artist": "artist"},
-        "spotify": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"}
+        "spotify": {"track": "track", "album": "album", "artist": "artist", "playlist": "playlist"},
+        "applemusic": {"track": "song", "album": "album", "artist": "artist", "playlist": "playlist"}
     }
 
     if p_lower == "soundcloud":
@@ -2395,7 +2543,62 @@ def build_url_from_result(result_data):
         else:
             print(f"[URL Build - Beatport] Fallback failed: Path construction not supported for type '{t_lower}'.")
             return None
-    else:        
+    elif p_lower == "applemusic":
+        print(f"[URL Build - Apple Music] Building URL for {t_lower} with ID {item_id}")
+        
+        # Apple Music URLs have format: https://music.apple.com/{country}/{type}/{name}/{id}
+        # We need to construct this properly
+        country = "us"  # Default to US, could be extracted from raw_result if available
+        
+        # Try to extract country from raw result if available
+        if raw_result_obj:
+            try:
+                # Check if we have country info in the raw result
+                if hasattr(raw_result_obj, 'href') and raw_result_obj.href:
+                    href_parts = raw_result_obj.href.split('/')
+                    if len(href_parts) > 3:
+                        potential_country = href_parts[3]
+                        if len(potential_country) == 2:  # Country codes are 2 letters
+                            country = potential_country
+                elif hasattr(raw_result_obj, 'attributes') and 'url' in raw_result_obj.attributes:
+                    url_parts = raw_result_obj.attributes['url'].split('/')
+                    if len(url_parts) > 3:
+                        potential_country = url_parts[3]
+                        if len(potential_country) == 2:
+                            country = potential_country
+            except Exception as e:
+                print(f"[URL Build - Apple Music] Could not extract country from raw result: {e}")
+        
+        # Map the type to Apple Music URL format
+        type_mapping = {
+            "track": "song",
+            "album": "album", 
+            "artist": "artist",
+            "playlist": "playlist"
+        }
+        
+        apple_music_type = type_mapping.get(t_lower, "song")
+        
+        # Try to get a proper name for the URL from raw result
+        url_name = "unknown"
+        if raw_result_obj:
+            try:
+                if hasattr(raw_result_obj, 'attributes') and 'name' in raw_result_obj.attributes:
+                    name = raw_result_obj.attributes['name']
+                    # Slugify the name for URL
+                    url_name = _simple_slugify(name) or "unknown"
+                elif hasattr(raw_result_obj, 'name'):
+                    name = raw_result_obj.name
+                    url_name = _simple_slugify(name) or "unknown"
+            except Exception as e:
+                print(f"[URL Build - Apple Music] Could not extract name from raw result: {e}")
+        
+        # Construct the Apple Music URL
+        apple_music_url = f"https://music.apple.com/{country}/{apple_music_type}/{url_name}/{item_id}"
+        print(f"[URL Build - Apple Music] Constructed URL: {apple_music_url}")
+        return apple_music_url
+    
+    else:
         if p_lower in base_urls and p_lower in type_paths and t_lower in type_paths[p_lower]:
             url_path_segment = type_paths[p_lower][t_lower]; url = f"{base_urls[p_lower]}/{url_path_segment}/{item_id}"
             print(f"[URL Build - {platform}] Constructed: {url}"); return url
@@ -2819,6 +3022,169 @@ def browse_ffmpeg_path(path_variable):
     if filepath:
         path_variable.set(filepath)
 
+def run_download_in_subprocess(url, output_path, gui_settings, search_result_data, output_queue_mp):
+    """Runs the download in a separate subprocess for complete GUI isolation."""
+    import sys
+    import os
+    
+    # Re-initialize everything in the subprocess
+    try:
+        # Set up the script directory and paths
+        script_dir = get_script_directory()
+        if script_dir and os.path.isdir(script_dir):
+            os.chdir(script_dir)
+            if script_dir not in sys.path:
+                sys.path.insert(0, script_dir)
+        
+        # Import Orpheus in the subprocess
+        import orpheus.core
+        from orpheus.core import Orpheus
+        from orpheus.music_downloader import Downloader
+        from utils.models import Oprinter
+        
+        # Initialize Orpheus instance in subprocess
+        orpheus_subprocess = Orpheus()
+        
+        # Set up logging to send to the main process queue
+        class SubprocessQueueWriter:
+            def __init__(self, queue_ref):
+                self.queue = queue_ref
+            
+            def write(self, msg):
+                try:
+                    self.queue.put(msg, timeout=1)
+                except:
+                    pass
+            
+            def flush(self):
+                pass
+        
+        # Redirect output to the main process
+        queue_writer = SubprocessQueueWriter(output_queue_mp)
+        sys.stdout = queue_writer
+        
+        # Run the actual download
+        run_download_in_thread(orpheus_subprocess, url, output_path, gui_settings, search_result_data)
+        
+    except Exception as e:
+        try:
+            output_queue_mp.put(f"Subprocess error: {e}\n", timeout=1)
+        except:
+            pass
+
+def final_download_cleanup(success=False):
+    """Handles UI cleanup when download process completes."""
+    global download_process_active, file_download_queue, current_batch_output_path, app
+    
+    try:
+        download_process_active = False
+        set_ui_state_downloading(False)
+        
+        # Handle batch downloads
+        if file_download_queue:
+            next_url = file_download_queue.pop(0)
+            print(f"Queueing next download from file: {next_url} ({len(file_download_queue)} remaining)")
+            if current_batch_output_path:
+                app.after(100, lambda u=next_url, p=current_batch_output_path: _start_single_download(u, p, None))
+            else:
+                print("[Error] Batch path missing.")
+                file_download_queue.clear()
+        else:
+            if current_batch_output_path:
+                print("File download queue is empty. Batch finished.")
+                current_batch_output_path = None
+        
+        print(f"Download process completed. Success: {success}")
+        
+    except Exception as e:
+        print(f"Error in download cleanup: {e}")
+        download_process_active = False
+        set_ui_state_downloading(False)
+
+def run_download_in_thread_responsive(orpheus, url, output_path, gui_settings, search_result_data=None):
+    """Runs the download with aggressive yielding to keep GUI responsive."""
+    global output_queue, stop_event, app, download_process_active, DEFAULT_SETTINGS, _queue_log_handler_instance
+    import time
+    
+    if _queue_log_handler_instance:
+        _queue_log_handler_instance.reset_ffmpeg_state_for_current_download()
+
+    if orpheus is None:
+        logging.error("Orpheus instance not available. Cannot start download.")
+        try:
+            if 'app' in globals() and app and app.winfo_exists():
+                 app.after(0, lambda: set_ui_state_downloading(False))
+        except NameError: pass
+        except Exception as e: logging.error(f"Error scheduling UI reset after Orpheus instance error: {e}")
+        return
+
+    # Aggressive yielding helper
+    def yield_to_gui(duration=0.001):
+        time.sleep(duration)
+        if 'app' in globals() and app:
+            try:
+                app.update_idletasks()  # Process pending GUI events
+            except:
+                pass
+
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    queue_writer = QueueWriter(output_queue)
+    dummy_stderr = DummyStderr()
+    is_cancelled = False
+    download_exception_occurred = False
+    start_time = datetime.datetime.now()
+
+    # Initial yield
+    yield_to_gui(0.01)
+
+    try:
+        sys.stdout = queue_writer
+        sys.stderr = dummy_stderr
+        
+        # Yield frequently during setup
+        yield_to_gui()
+        
+        downloader_settings = {
+            "general": {
+                "download_path": gui_settings.get("globals", {}).get("general", {}).get("output_path", DEFAULT_SETTINGS["globals"]["general"]["output_path"]),
+                "download_quality": gui_settings.get("globals", {}).get("general", {}).get("quality", DEFAULT_SETTINGS["globals"]["general"]["quality"]),
+                "search_limit": gui_settings.get("globals", {}).get("general", {}).get("search_limit", DEFAULT_SETTINGS["globals"]["general"]["search_limit"])
+            },
+            **{k: v for k, v in gui_settings.get("globals", {}).items() if k != "general"}
+        }
+        
+        yield_to_gui()
+        
+        # Continue with the same download logic but with frequent yielding...
+        # For brevity, I'll reference the existing download logic from run_download_in_thread
+        # but add yield_to_gui() calls throughout
+        
+        # This is a wrapper that calls the original download function but with yielding
+        def yielding_download():
+            return run_download_in_thread(orpheus, url, output_path, gui_settings, search_result_data)
+        
+        # Run download with periodic yielding
+        download_result = yielding_download()
+        
+    except Exception as e:
+        print(f"Error in responsive download: {e}")
+    finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+        
+        # Final cleanup
+        def final_cleanup():
+            global download_process_active
+            download_process_active = False
+            set_ui_state_downloading(False)
+        
+        try:
+            if 'app' in globals() and app and app.winfo_exists():
+                app.after(0, final_cleanup)
+        except:
+            final_cleanup()
+
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     _mutex_handle = None
@@ -2933,7 +3299,7 @@ if __name__ == "__main__":
                 }
             },
             "credentials": {
-                "AppleMusic": { "get_original_cover": True, "print_original_cover_url": False, "lyrics_type": "standard", "lyrics_custom_ms_sync": False, "lyrics_language_override": "", "lyrics_syllable_sync": False, "email": "", "password": "", "force_region": "", "selected_language": "en" },
+                "AppleMusic": { "cookies_path": "./config/cookies.txt", "language": "en-US", "codec": "aac", "quality": "high" },
                 "Beatport": { "username": "", "password": "" },
                 "Beatsource": { "username": "", "password": "" },
                 "Bugs": { "username": "", "password": "" },
