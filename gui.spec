@@ -48,7 +48,8 @@ a = Analysis(
         'webbrowser',
         'librespot',
         'pkce',
-	'pywidevine'
+	'pywidevine',
+	'yt-dlp'
     ],
     excludes=['torch', 'cuda', 'pytorch', 'matplotlib', 'pandas', 'numpy'],
     hookspath=['.'],
