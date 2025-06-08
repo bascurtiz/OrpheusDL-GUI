@@ -1,4 +1,19 @@
 import os
+# Start of PyInstaller runtime path logic
+import sys
+if getattr(sys, 'frozen', False):
+    # If the application is run as a bundle, the pyInstaller bootloader
+    # extends the sys module by a flag frozen=True.
+    # We need to add the 'modules' and 'orpheus' folders, which are expected
+    # to be in the same directory as the executable, to the python path.
+    application_path = os.path.dirname(sys.executable)
+    # Add the main 'orpheus' package directory
+    sys.path.insert(0, application_path)
+    # Add the 'modules' directory
+    modules_path = os.path.join(application_path, 'modules')
+    if os.path.isdir(modules_path):
+        sys.path.insert(0, modules_path)
+# End of PyInstaller runtime path logic
 os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
 import copy
 import customtkinter
