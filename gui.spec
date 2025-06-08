@@ -34,6 +34,7 @@ a = Analysis(
         'os',
         'PIL',
         'PIL._tkinter_finder',
+        'pillow',
         'platform',
         'requests',
         'subprocess',
@@ -46,10 +47,12 @@ a = Analysis(
         'uuid',
         'wave',
         'webbrowser',
+        'pytz',
         'librespot',
         'pkce',
 	'pywidevine',
-	'yt-dlp'
+	'yt-dlp',
+	'yt_dlp'
     ],
     excludes=['torch', 'cuda', 'pytorch', 'matplotlib', 'pandas', 'numpy'],
     hookspath=['.'],
