@@ -4,15 +4,21 @@ import sys
 if getattr(sys, 'frozen', False):
     # If the application is run as a bundle, the pyInstaller bootloader
     # extends the sys module by a flag frozen=True.
-    # We need to add the 'modules' and 'orpheus' folders, which are expected
-    # to be in the same directory as the executable, to the python path.
     application_path = os.path.dirname(sys.executable)
+    
     # Add the main 'orpheus' package directory
     sys.path.insert(0, application_path)
-    # Add the 'modules' directory
+    
+    # Add the 'modules' directory for general module loading
     modules_path = os.path.join(application_path, 'modules')
     if os.path.isdir(modules_path):
         sys.path.insert(0, modules_path)
+
+    # Add the specific nested 'gamdl' path required by the applemusic module
+    # This is the parent of the actual 'gamdl' package.
+    gamdl_parent_path = os.path.join(application_path, 'modules', 'applemusic', 'gamdl')
+    if os.path.isdir(gamdl_parent_path):
+        sys.path.insert(0, gamdl_parent_path)
 # End of PyInstaller runtime path logic
 os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
 import copy
