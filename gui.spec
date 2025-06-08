@@ -53,7 +53,7 @@ a = Analysis(
 	'pywidevine'
     ],
     excludes=['torch', 'cuda', 'pytorch', 'matplotlib', 'pandas', 'numpy'],
-    hookspath=[],
+    hookspath=['.'],
     hooksconfig={},
     runtime_hooks=[],
     win_no_prefer_redirects=False,
