@@ -50,6 +50,30 @@ if sys.platform == "win32":
 
 _SCRIPT_DIR = None
 
+SERVICE_COLORS = {
+    "tidal": "#33ffe7",
+    "jiosaavn": "#1eccb0",
+    "apple music": "#fb233c",
+    "beatport": "#00ff89",
+    "beatsource": "#16a8f4",
+    "deezer": "#a238ff",
+    "qobuz": "#0070ef",
+    "soundcloud": "#ff5502",
+    "spotify": "#1cc659"
+}
+
+SERVICE_DISPLAY_NAMES = {
+    "tidal": "Tidal",
+    "jiosaavn": "JioSaavn",
+    "apple music": "Apple Music",
+    "beatport": "Beatport",
+    "beatsource": "Beatsource",
+    "deezer": "Deezer",
+    "qobuz": "Qobuz",
+    "soundcloud": "SoundCloud",
+    "spotify": "Spotify"
+}
+
 def _simple_slugify(text):
     if not text: return None
     text = str(text).lower()
@@ -340,7 +364,7 @@ if platform.system() == "Windows":
                     kwargs['startupinfo'] = startupinfo
                     
             except Exception as e:
-                print(f"[Patch Warning] Could not set subprocess flags to hide console: {e}", file=sys.__stderr__)
+                print(f"[Patch Warning] Could not set subprocess flags to hide console: {e}", file=sys.stderr__)
             
             super().__init__(*args, **kwargs)
     
@@ -1171,33 +1195,57 @@ def log_to_textbox(msg, error=False):
                 log_textbox.tag_bind("hyperlink", "<Enter>", lambda e: log_textbox.config(cursor="hand2"))
                 log_textbox.tag_bind("hyperlink", "<Leave>", lambda e: log_textbox.config(cursor=""))
                 log_textbox.tag_bind("hyperlink", "<Button-1>", _on_hyperlink_click)
+                for service, color in SERVICE_COLORS.items():
+                    log_textbox.tag_configure(f"service_{service.replace(' ', '_')}", foreground=color)
             except: pass
 
             url_regex = r'(https?://[^\s<>"]+|www\\.[^\s<>"]+)'
-            matches = list(re.finditer(url_regex, content_to_insert))
+            service_regex = r'Service: (' + '|'.join(re.escape(s) for s in SERVICE_COLORS.keys()) + ')'
+            
+            combined_regex = f'({url_regex})|({service_regex})'
+            matches = list(re.finditer(combined_regex, content_to_insert, re.IGNORECASE))
 
             if matches:
                 last_end = 0
                 for match in matches:
                     start, end = match.span()
-                    if start > last_end:
-                        non_url_segment = content_to_insert[last_end:start]
-                        tag_for_segment = "normal"
-                        if "=== Track" in non_url_segment and ("downloaded ===" in non_url_segment or "completed ===" in non_url_segment): tag_for_segment = "downloaded_track"
-                        elif "=== Track" in non_url_segment and "skipped ===" in non_url_segment: tag_for_segment = "skipped_track"
-                        elif "=== Track" in non_url_segment and (("failed (" in non_url_segment and ") ===" in non_url_segment) or "failed ===" in non_url_segment): tag_for_segment = "error"
-                        elif ("[INFO]" in non_url_segment or "[WARNING]" in non_url_segment or 
-                              "[ERROR]" in non_url_segment or "[CRITICAL]" in non_url_segment): tag_for_segment = "detail_text"
-                        elif ("Download stop requested..." in non_url_segment or 
-                              non_url_segment.strip() == "Download Cancelled." or 
-                              non_url_segment.strip() == "Download Cancelled (during file transfer)."): tag_for_segment = "skipped_track"
-                        elif "Track file already exists" in non_url_segment: tag_for_segment = "detail_text"
-                        log_textbox.insert("end", non_url_segment, (tag_for_segment,))
                     
-                    url_text = content_to_insert[start:end]
-                    log_textbox.insert("end", url_text, ("hyperlink",))
+                    # Insert the text before the current match
+                    if start > last_end:
+                        non_match_segment = content_to_insert[last_end:start]
+                        # Determine tag for this non-match segment (existing logic)
+                        tag_for_segment = "normal"
+                        if "=== Track" in non_match_segment and ("downloaded ===" in non_match_segment or "completed ===" in non_match_segment): tag_for_segment = "downloaded_track"
+                        elif "=== Track" in non_match_segment and "skipped ===" in non_match_segment: tag_for_segment = "skipped_track"
+                        elif "=== Track" in non_match_segment and (("failed (" in non_match_segment and ") ===" in non_match_segment) or "failed ===" in non_match_segment): tag_for_segment = "error"
+                        elif ("[INFO]" in non_match_segment or "[WARNING]" in non_match_segment or 
+                              "[ERROR]" in non_match_segment or "[CRITICAL]" in non_match_segment): tag_for_segment = "detail_text"
+                        elif ("Download stop requested..." in non_match_segment or 
+                              non_match_segment.strip() == "Download Cancelled." or 
+                              non_match_segment.strip() == "Download Cancelled (during file transfer)."): tag_for_segment = "skipped_track"
+                        elif "Track file already exists" in non_match_segment: tag_for_segment = "detail_text"
+                        log_textbox.insert("end", non_match_segment, (tag_for_segment,))
+
+                    # Check which part of the combined regex matched
+                    matched_text = content_to_insert[start:end]
+                    if re.fullmatch(url_regex, matched_text, re.IGNORECASE):
+                        # It's a URL
+                        log_textbox.insert("end", matched_text, ("hyperlink",))
+                    elif re.search(service_regex, matched_text, re.IGNORECASE):
+                        # It's a service line
+                        service_name_match = re.search(r'(' + '|'.join(re.escape(s) for s in SERVICE_COLORS.keys()) + ')', matched_text, re.IGNORECASE)
+                        if service_name_match:
+                            service_name_from_match = service_name_match.group(1).lower()
+                            service_display_name = SERVICE_DISPLAY_NAMES.get(service_name_from_match, service_name_from_match)
+                            service_tag = f"service_{service_name_from_match.replace(' ', '_')}"
+                            
+                            prefix = "Service: "
+                            log_textbox.insert("end", prefix) # Insert "Service: " with default color
+                            log_textbox.insert("end", service_display_name, (service_tag,)) # Insert service name with color
+                    
                     last_end = end
                 
+                # Insert any remaining text after the last match
                 if last_end < len(content_to_insert):
                     remaining_segment = content_to_insert[last_end:]
                     tag_for_segment = "normal"
@@ -1418,85 +1466,31 @@ def _check_and_toggle_text_scrollbar(text_widget, scrollbar_widget):
 class QueueWriter(io.TextIOBase):
     def __init__(self, queue_instance):
         self.queue = queue_instance
+        self.buffer = ''
 
     def write(self, msg):
-        msg_strip = msg.lstrip()
-        if "[Music Downloader] force_album_format is ON, but no valid album_info found for track" in msg_strip and "album_id: ''" in msg_strip:
-            return len(msg)
-        beatsource_patterns = [
-            r"^Attempting login via https://api\.beatsource\.com/v4/auth/login/",
-            r"^Login successful, obtained session ID\.",
-            r"^Attempting authorization via https://api\.beatsource\.com/v4/auth/o/authorize/",
-            r"^Authorization successful, obtained code\.",
-            r"^Exchanging code for token via https://api\.beatsource\.com/v4/auth/o/token/",
-            r"^Token exchange successful\."
-        ]
-        for pattern in beatsource_patterns:
-            if re.search(pattern, msg_strip):
-                return len(msg)
-
-        if "[JioSaavn Warning] Accessing song data using the first key as fallback." in msg_strip:
-            return len(msg)
-        if "AttributeError: 'OrpheusOptions' object has no attribute 'global_settings'" in msg_strip:
-            return len(msg)
-        
-        if msg_strip.startswith("Processing ") and "TrackInfo(" in msg_strip:
-            return len(msg)
-        
-        if msg_strip.startswith("Processing album ") and "{'id':" in msg_strip:
-            return len(msg)
-        
-        if "Spotify authentication error during track download:" in msg_strip:
-            return len(msg)
-        if msg_strip.startswith("Download attempt ") and "failed. Retrying in" in msg_strip:
-            return len(msg)
-        
-        is_fetching_line = False
-        if msg_strip.startswith("Fetching "):
-            parts = msg_strip.split(None, 1)
-            if len(parts) > 1 and '/' in parts[1]:
-                num_parts = parts[1].split('/', 1)
-                if len(num_parts) > 1 and num_parts[0].isdigit():
-                    is_fetching_line = True
-
-        if is_fetching_line:
-             pass
-        else:
-            is_progress_line = False
-            if msg_strip and msg_strip[0].isdigit():
-                parts = msg_strip.split('|')
-                if len(parts) > 1 and parts[0].endswith('%'):
-                     if any(unit in msg for unit in ['MB/s', 'KB/s', 'B/s', '[', ']']):
-                          is_progress_line = True
-
-            if is_progress_line:
-                pass
-            else:
-                final_msg = msg.replace('\r', '').strip()
-                if final_msg:
-                   if final_msg == "Track file already exists":
-                       final_msg = "[INFO] Track file already exists"
-                   elif "Pausing for" in final_msg and "before next download attempt" in final_msg:
-                       self.queue.put('\n')
-                   global _queue_log_handler_instance
-                   if final_msg == "=== Track failed ===" and \
-                      _queue_log_handler_instance and \
-                      _queue_log_handler_instance._specific_ffmpeg_hls_error_logged_this_download:
-                       self.queue.put("=== Track failed (due to FFmpeg issue reported above) ===\n")
-                   else:
-                       self.queue.put(final_msg + '\n')
-
+        self.buffer += msg
+        if '\n' in self.buffer:
+            lines = self.buffer.split('\n')
+            for line in lines[:-1]:
+                self.queue.put(line + '\n')
+            self.buffer = lines[-1]
         return len(msg)
 
     def flush(self):
-        pass
+        if self.buffer:
+            self.queue.put(self.buffer)
+            self.buffer = ''
+
     def readable(self):
         return False
+
     def seekable(self):
         return False
+
     def writable(self):
         return True
-    
+
 def run_download_in_thread(orpheus, url, output_path, gui_settings, search_result_data=None):
     """Runs the download using the provided global Orpheus instance."""
     global output_queue, stop_event, app, download_process_active, DEFAULT_SETTINGS, _queue_log_handler_instance
@@ -1918,6 +1912,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             print(final_status_message + "\n")
         
         print(time_taken_message)
+        print("\n\n")
 
         sys.stdout = original_stdout
         sys.stderr = original_stderr
