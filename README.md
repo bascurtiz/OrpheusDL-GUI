@@ -1,7 +1,7 @@
 # OrpheusDL GUI
 
 ## Trailer
-[![Watch trailer](https://i.imgur.com/CxG3Bkw.png)](https://youtu.be/RAXsW67SjGU)
+[![Watch trailer](https://i.imgur.com/UENa7ln.png)](https://youtu.be/RAXsW67SjGU)
 
 ## How to install:
 
@@ -39,7 +39,7 @@ https://youtu.be/AGsYTQuO7nk
 
 | Platform     | Tested | Platform     | Tested | Platform     | Tested | Platform     | Tested |
 |--------------|--------|--------------|--------|--------------|--------|--------------|--------|
-| Apple Music  | \*     | Beatport     | ✅     | Beatsource   | ✅     | Bugs         | \*     |
+| Apple Music  | ✅     | Beatport     | ✅     | Beatsource   | ✅     | Bugs         | \*     |
 | Deezer       | ✅     | Genius       | \*     | Idagio       | \*     | JioSaavn     | ✅     |
 | KKBOX        | \*     | Musixmatch   | \*     | Napster      | \*     | Nugs.net     | \*     |
 | Qobuz        | ✅     | SoundCloud   | ✅     | Spotify      | ✅     | Tidal        | ✅     |
