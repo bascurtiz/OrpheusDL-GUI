@@ -15,7 +15,7 @@ https://youtu.be/AGsYTQuO7nk
 4. Double-click `OrpheusDL_GUI` (or make a shortcut to desktop)
 
 ### Linux (or if you prefer running from source):
-1. Clone this repository (`git clone https://github.com/bascurtiz/OrpheusDL-GUI.git`) or download the ZIP file.
+1. Clone this repository (`git clone https://github.com/bascurtiz/OrpheusDL-GUI`) or download the ZIP file.
 2. Ensure all files from this repository are placed in the same folder where your `orpheus.py` is located.
 3. Update your package list: `sudo apt update`
 4. Install the Python virtual environment package: `sudo apt install python3-venv`
