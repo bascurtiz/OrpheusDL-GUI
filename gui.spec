@@ -52,8 +52,8 @@ a = Analysis(
         'librespot.core',
         'librespot.metadata',
         'pkce',
-	    'pywidevine',
-	    'yt_dlp'
+        'pywidevine',
+        'yt_dlp'
     ],
     excludes=['torch', 'cuda', 'pytorch', 'matplotlib', 'pandas', 'numpy'],
     hookspath=['.'],
