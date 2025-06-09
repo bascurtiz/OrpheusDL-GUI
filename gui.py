@@ -604,18 +604,14 @@ def save_settings(show_confirmation: bool = True):
         True if save was successful, False otherwise.
     """
     global settings_vars, current_settings, DEFAULT_SETTINGS, CONFIG_FILE_PATH, orpheus_instance
-    print("[Save Settings] Starting load-merge-save process...", file=sys.__stdout__)
     existing_settings = {}
     try:
         if os.path.exists(CONFIG_FILE_PATH):
             with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as f: existing_settings = json.load(f)
-            print(f"[Save Settings] Loaded existing settings from {CONFIG_FILE_PATH}", file=sys.__stdout__)
         else:
-            print(f"[Save Settings] No existing settings file found at {CONFIG_FILE_PATH}. Will create a new one.", file=sys.__stdout__)
             existing_settings = { "global": {"general": {},"formatting": {},"codecs": {},"covers": {},"playlist": {},"advanced": {},"module_defaults": {},"artist_downloading": {},"lyrics": {}}, "modules": {} }
     except (json.JSONDecodeError, IOError) as e:
         error_message = f"Error loading existing settings file '{CONFIG_FILE_PATH}':\\n{type(e).__name__}: {e}. Cannot proceed with save."
-        print(f"[Save Settings] {error_message}", exc_info=True, file=sys.__stderr__)
         show_centered_messagebox("Settings Error", error_message, dialog_type="error")
         return False
     updated_gui_settings = {"globals": {}, "credentials": {}}
@@ -644,27 +640,15 @@ def save_settings(show_confirmation: bool = True):
     if isinstance(mp3_var, tkinter.StringVar):
         raw_selected_mp3_option = mp3_var.get()
         selected_mp3_option = raw_selected_mp3_option.strip()
-        is_debug = current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False)
-
-        if is_debug:
-            print(f"[Save Settings MP3 DEBUG] Raw value from StringVar: '{raw_selected_mp3_option}' (len {len(raw_selected_mp3_option)}), repr: {repr(raw_selected_mp3_option)}")
-            print(f"[Save Settings MP3 DEBUG] Stripped value: '{selected_mp3_option}' (len {len(selected_mp3_option)}), repr: {repr(selected_mp3_option)}")
-            print(f"[Save Settings MP3 DEBUG] Comparing stripped '{selected_mp3_option}' with 'MP3 VBR (Max Quality)': {selected_mp3_option == 'MP3 VBR (Max Quality)'}")
+        
         if selected_mp3_option == "MP3 VBR (Max Quality)":
-            if is_debug:
-                print(f"[Save Settings - MP3 WORKAROUND ACTIVE] Normalizing '{raw_selected_mp3_option}' (stripped to '{selected_mp3_option}') to 'VBR -V0' before processing.")
             selected_mp3_option = "VBR -V0"
-        elif is_debug and selected_mp3_option != "VBR -V0" and not selected_mp3_option.endswith("k"):
-             print(f"[Save Settings MP3 DEBUG] Workaround condition was FALSE for stripped value '{selected_mp3_option}'. It is not 'MP3 VBR (Max Quality)'. Proceeding to check standard valid options.")
 
         if selected_mp3_option == "VBR -V0":
-            if is_debug: print(f"[Save Settings MP3 DEBUG] Condition 'VBR -V0' met for '{selected_mp3_option}'. Setting qscale:a.")
             collected_conversion_flags["mp3"] = {"qscale:a": "0"}
         elif selected_mp3_option.endswith("k"):
-            if is_debug: print(f"[Save Settings MP3 DEBUG] Condition '.endswith(\"k\")' met for '{selected_mp3_option}'. Setting audio_bitrate.")
             collected_conversion_flags["mp3"] = {"audio_bitrate": selected_mp3_option}
         else:
-            if is_debug: print(f"[Save Settings MP3 DEBUG] All standard conditions failed for stripped value '{selected_mp3_option}'. Appending parse error for raw value '{raw_selected_mp3_option}'.")
             parse_errors.append(f"Invalid MP3 setting selected from var '{mp3_var_key}': '{raw_selected_mp3_option}'. Using default.")
             collected_conversion_flags["mp3"] = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["mp3"].copy()
     else:
@@ -684,7 +668,6 @@ def save_settings(show_confirmation: bool = True):
             continue
 
         if key_path_str == "advanced.codec_conversions":
-            print(f"[Save Settings DEBUG - Codec Processing] '{key_path_str}'. Var type: {type(var)}", file=sys.__stdout__)
             if isinstance(var, dict):
                 keys = key_path_str.split('.')
                 temp_dict = updated_gui_settings["globals"]
@@ -695,16 +678,9 @@ def save_settings(show_confirmation: bool = True):
                 final_dict_key = keys[-1]
                 codec_conversions_to_save = {}
                 grouped_vars = {}
-                print("[SaveSettings Codec DEBUG] Raw StringVar values before grouping:", file=sys.__stdout__)
-                for k_in, v_in in var.items():
-                    if isinstance(v_in, tkinter.Variable):
-                        print(f"  - {k_in}: '{v_in.get()}'", file=sys.__stdout__)
-                    else:
-                        print(f"  - {k_in}: NOT A TKINTER VAR (type: {type(v_in)})", file=sys.__stdout__)
 
                 for inner_key, tkinter_var_instance in var.items():
                     if not isinstance(tkinter_var_instance, tkinter.Variable):
-                        print(f"[Save Settings Codec WARN] Item '{inner_key}' in codec_conversions dict is not a tkinter.Variable. Skipping.", file=sys.__stdout__)
                         continue
                     actual_value = tkinter_var_instance.get()
                     base_key = inner_key.replace('_source', '').replace('_target', '')
@@ -715,26 +691,18 @@ def save_settings(show_confirmation: bool = True):
                     elif inner_key.endswith('_target'):
                         grouped_vars[base_key]['target'] = actual_value
 
-                print(f"[SaveSettings Codec DEBUG] Grouped vars: {grouped_vars}", file=sys.__stdout__)
-
                 for base_key, pair_values in grouped_vars.items():
                     source_val = pair_values.get('source')
                     target_val = pair_values.get('target')
                     if source_val and target_val:
                         codec_conversions_to_save[source_val] = target_val
-                    elif source_val and not target_val:
-                        print(f"[SaveSettings Codec WARN] Missing target for source '{source_val}' (base_key: {base_key}). Will not be saved.", file=sys.__stdout__)
-                    elif not source_val and target_val:
-                        print(f"[SaveSettings Codec WARN] Missing source for target '{target_val}' (base_key: {base_key}). Will not be saved.", file=sys.__stdout__)
                 
                 temp_dict[final_dict_key] = codec_conversions_to_save
-                print(f"[SaveSettings Codec DEBUG] Prepared '{final_dict_key}': {temp_dict[final_dict_key]}", file=sys.__stdout__)
             else:
-                print(f"[Save Settings WARN] 'advanced.codec_conversions' var is not a dict as expected. Type: {type(var)}. Skipping save logic for it.", file=sys.__stdout__)
+                pass
             continue
         
         if not isinstance(var, tkinter.Variable):
-            print(f"[Save Settings WARN] Skipping non-Variable or unhandled dict: {key_path_str} of type {type(var)} during general processing.", file=sys.__stdout__)
             continue
         raw_value = var.get(); keys = key_path_str.split('.')
         try:
@@ -766,16 +734,15 @@ def save_settings(show_confirmation: bool = True):
             elif original_value is None: final_value = str(raw_value)
             else: final_value = str(raw_value)
             current_data[setting_key] = final_value
-        except Exception as e: error_msg = f"Error processing global setting '{key_path_str}': {e}"; print(f"[Save Settings] {error_msg}", flush=True, file=sys.__stderr__); traceback.print_exc(file=sys.__stderr__); parse_errors.append(error_msg)
+        except Exception as e: error_msg = f"Error processing global setting '{key_path_str}': {e}"; parse_errors.append(error_msg)
     for platform_name, fields in settings_vars.get("credentials", {}).items():
          if platform_name not in updated_gui_settings["credentials"]: updated_gui_settings["credentials"][platform_name] = {}
          for field_key, var in fields.items():
               if not isinstance(var, tkinter.Variable): continue
               updated_gui_settings["credentials"][platform_name][field_key] = str(var.get())
     if parse_errors:
-         error_list = "\n - ".join(parse_errors)
-         show_centered_messagebox("Settings Error", f"Could not save due to invalid values:\n - {error_list}", dialog_type="error")
-         print(f"[Save Settings] Validation failed: {error_list}", file=sys.__stderr__)
+         error_list = "\\n - ".join(parse_errors)
+         show_centered_messagebox("Settings Error", f"Could not save due to invalid values:\\n - {error_list}", dialog_type="error")
          return False
     mapped_orpheus_updates = { "global": {"general": {},"formatting": {},"codecs": {},"covers": {},"playlist": {},"advanced": {},"module_defaults": {},"artist_downloading": {},"lyrics": {}}, "modules": {} }
     gui_globals = updated_gui_settings.get("globals", {})
@@ -785,16 +752,11 @@ def save_settings(show_confirmation: bool = True):
         if "general" not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"]["general"] = {}
         for gui_key, orpheus_key in general_map_gui_to_orpheus.items():
             if gui_key in gui_general_section: mapped_orpheus_updates["global"]["general"][orpheus_key] = gui_general_section[gui_key]
-    if "globals" in updated_gui_settings and \
-       "advanced" in updated_gui_settings["globals"] and \
-       "conversion_flags" in updated_gui_settings["globals"]["advanced"]:
+    if "globals" in updated_gui_settings and "advanced" in updated_gui_settings["globals"] and "conversion_flags" in updated_gui_settings["globals"]["advanced"]:
         if "global" not in mapped_orpheus_updates: mapped_orpheus_updates["global"] = {}
         if "advanced" not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"]["advanced"] = {}
         
-        mapped_orpheus_updates["global"]["advanced"]["conversion_flags"] = \
-            copy.deepcopy(updated_gui_settings["globals"]["advanced"]["conversion_flags"])
-        if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-            print(f"[DEBUG SAVE Settings] Explicitly deep-copied conversion_flags to mapped_orpheus_updates.", file=sys.__stdout__)
+        mapped_orpheus_updates["global"]["advanced"]["conversion_flags"] = copy.deepcopy(updated_gui_settings["globals"]["advanced"]["conversion_flags"])
 
     for section_key, section_data in gui_globals.items():
          if section_key != "general" and section_key in mapped_orpheus_updates["global"]:
@@ -810,20 +772,13 @@ def save_settings(show_confirmation: bool = True):
         if orpheus_platform:
             if orpheus_platform not in mapped_orpheus_updates["modules"]: mapped_orpheus_updates["modules"][orpheus_platform] = {}
             mapped_orpheus_updates["modules"][orpheus_platform] = creds.copy()
-    if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-        debug_conversion_flags_before_merge = mapped_orpheus_updates.get("global", {}).get("advanced", {}).get("conversion_flags", "NOT_FOUND_IN_MAPPED_ORPHEUS_UPDATES")
-        print(f"[DEBUG SAVE Settings] `mapped_orpheus_updates[global][advanced][conversion_flags]` (before merge): {debug_conversion_flags_before_merge}", file=sys.__stdout__)
 
-    print("[Save Settings] Merging validated UI changes into existing settings structure...", file=sys.__stdout__)
     final_settings_to_save = deep_merge(existing_settings, mapped_orpheus_updates, keys_to_overwrite_if_dicts=["codec_conversions", "conversion_flags"])
     try:
-        print(f"[Save Settings] Attempting to write merged settings to {CONFIG_FILE_PATH}", file=sys.__stdout__)
         config_dir = os.path.dirname(CONFIG_FILE_PATH)
-        if not os.path.exists(config_dir): os.makedirs(config_dir); print(f"[Save Settings] Created config directory: {config_dir}", file=sys.__stdout__)
+        if not os.path.exists(config_dir): os.makedirs(config_dir)
         with open(CONFIG_FILE_PATH, 'w', encoding='utf-8') as f: json.dump(final_settings_to_save, f, indent=4, ensure_ascii=False, sort_keys=True)
-        print(f"[Save Settings] Settings successfully written to {CONFIG_FILE_PATH}.", file=sys.__stdout__)
 
-        print("[Save Settings] Updating in-memory 'current_settings' from GUI values...", file=sys.__stdout__)
         deep_merge(current_settings, updated_gui_settings, keys_to_overwrite_if_dicts=["codec_conversions", "conversion_flags"])
         if "globals" in updated_gui_settings and "advanced" in updated_gui_settings["globals"] and "conversion_flags" in updated_gui_settings["globals"]["advanced"]:
             clean_conversion_flags_from_ui = updated_gui_settings["globals"]["advanced"]["conversion_flags"]
@@ -837,13 +792,8 @@ def save_settings(show_confirmation: bool = True):
             if "mp3" in clean_conversion_flags_from_ui:
                 current_settings["globals"]["advanced"]["conversion_flags"]["mp3"] = clean_conversion_flags_from_ui["mp3"].copy()
         
-        print(f"[DEBUG SAVE] current_settings MP3 flags after explicit overwrite: {current_settings.get('globals', {}).get('advanced', {}).get('conversion_flags', {}).get('mp3')}", file=sys.__stdout__)
-
-        print("[Save Settings] In-memory 'current_settings' updated.", file=sys.__stdout__)
-        print("[Save Settings] Re-initializing Orpheus instance with updated settings...", file=sys.__stdout__)
         orpheus_instance = None
         initialize_orpheus()
-        print("[Save Settings] Orpheus instance re-initialized.", file=sys.__stdout__)
         if show_confirmation:
             show_centered_messagebox("Settings Saved", "Settings have been saved successfully.", dialog_type="info")
 
@@ -853,7 +803,6 @@ def save_settings(show_confirmation: bool = True):
         log_file_path = os.path.join(os.getcwd(), 'error_log.txt')
         error_message = f"Error writing settings file '{CONFIG_FILE_PATH}':\\n{type(e).__name__}: {e}"
         full_traceback = traceback.format_exc()
-        print(f"[Save Settings] {error_message}", exc_info=False, file=sys.__stderr__)
         try:
             with open(log_file_path, 'a', encoding='utf-8') as log_f:
                 log_f.write(f"--- Error during settings save (IOError) ---\\n")
@@ -862,7 +811,6 @@ def save_settings(show_confirmation: bool = True):
                 log_f.write("---------------------------------------------\\n")
             error_message_for_dialog = f"{error_message}\\n\\nSee 'error_log.txt' in the application folder for details."
         except Exception as log_e:
-            print(f"[Save Settings] CRITICAL: Failed to write to error log file: {log_e}", file=sys.__stderr__)
             error_message_for_dialog = f"{error_message}\\n\\n(Failed to write details to error_log.txt)"
         show_centered_messagebox("Settings Error", error_message_for_dialog, dialog_type="error")
         return False
@@ -870,7 +818,6 @@ def save_settings(show_confirmation: bool = True):
         log_file_path = os.path.join(os.getcwd(), 'error_log.txt')
         error_message = f"Unexpected error saving settings:\\n{type(e).__name__}: {e}"
         full_traceback = traceback.format_exc()
-        print(f"[Save Settings] {error_message}", exc_info=False, file=sys.__stderr__)
         try:
             with open(log_file_path, 'a', encoding='utf-8') as log_f:
                 log_f.write(f"--- Error during settings save (Exception) ---\\n")
@@ -879,7 +826,6 @@ def save_settings(show_confirmation: bool = True):
                 log_f.write("----------------------------------------------\\n")
             error_message_for_dialog = f"{error_message}\\n\\nSee 'error_log.txt' in the application folder for details."
         except Exception as log_e:
-            print(f"[Save Settings] CRITICAL: Failed to write to error log file: {log_e}", file=sys.__stderr__)
             error_message_for_dialog = f"{error_message}\\n\\n(Failed to write details to error_log.txt)"
         show_centered_messagebox("Settings Error", error_message_for_dialog, dialog_type="error")
         return False
@@ -889,11 +835,8 @@ def handle_save_settings():
     global save_status_var, app
 
     try:
-        print("[Handle Save] Calling save_settings function with confirmation...", file=sys.__stdout__)
         save_attempt_successful = save_settings(show_confirmation=True)
-        print(f"[Handle Save] save_settings returned: {save_attempt_successful}", file=sys.__stdout__)
-
-        print("[Handle Save] Refreshing UI from updated in-memory settings...", file=sys.__stdout__)
+        
         if 'app' in globals() and app and app.winfo_exists():
             app.after(50, _update_settings_tab_widgets)
         if save_attempt_successful:
@@ -901,27 +844,108 @@ def handle_save_settings():
                 save_status_var.set("Settings saved.")
             
             if 'update_search_platform_dropdown' in globals() and callable(update_search_platform_dropdown):
-                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-                    print("[Handle Save] Calling update_search_platform_dropdown after successful save.", file=sys.__stdout__)
                 app.after(100, update_search_platform_dropdown)
-            else:
-                print("[Handle Save] update_search_platform_dropdown not found after save.", file=sys.__stdout__)
         else:
             if 'save_status_var' in globals() and save_status_var:
                 save_status_var.set("Failed to save settings.")
 
     except Exception as e:
-        err_msg = f"Unexpected error during save handling:\n{type(e).__name__}: {e}"
+        err_msg = f"Unexpected error during save handling:\\n{type(e).__name__}: {e}"
         if 'save_status_var' in globals() and save_status_var:
             save_status_var.set(f"Error handling save: {type(e).__name__}")
         show_centered_messagebox("Save Error", err_msg, dialog_type="error")
-        print(f"[DEBUG] Error in handle_save_settings: {err_msg}", flush=True, file=sys.__stderr__)
         import traceback
         traceback.print_exc(file=sys.__stderr__)
     finally:
         if 'app' in globals() and app and app.winfo_exists() and 'save_status_var' in globals() and save_status_var:
             app.after(4000, lambda: save_status_var.set("") if save_status_var else None)
 
+def run_login_in_thread(orpheus, platform_name, gui_settings):
+    """Target function for the login thread."""
+    global output_queue, app
+    is_frozen = getattr(sys, 'frozen', False)
+    
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    queue_writer = QueueWriter(output_queue)
+    dummy_stderr = DummyStderr()
+    
+    sys.stdout = queue_writer
+    sys.stderr = dummy_stderr
+    
+    try:
+        module_instance = orpheus.load_module(platform_name)
+        if hasattr(module_instance, 'login'):
+            if platform_name.lower() == 'beatport':
+                string_io = io.StringIO()
+                sys.stdout = string_io
+                
+                login_success = module_instance.login()
+                sys.stdout = queue_writer
+                
+                captured_output = string_io.getvalue()
+                if "Professional subscription detected" not in captured_output and captured_output:
+                    output_queue.put(captured_output)
+            else:
+                 login_success = module_instance.login()
+
+            if login_success:
+                output_queue.put(f"{platform_name} login successful!\\n")
+            else:
+                output_queue.put(f"{platform_name} login failed. Check credentials or console for details.\\n")
+        else:
+            output_queue.put(f"The {platform_name} module does not have a login method.\\n")
+            
+    except Exception as e:
+        output_queue.put(f"An error occurred during {platform_name} login: {e}\\n")
+        if not is_frozen:
+            traceback.print_exc(file=sys.__stderr__)
+            
+    finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+        
+        if 'app' in globals() and app.winfo_exists():
+            app.after(0, lambda: _update_settings_tab_widgets())
+            
+def _update_settings_tab_widgets():
+    global credential_tabs_config, current_settings, app
+    
+    for platform_name, tab_info in credential_tabs_config.items():
+        if platform_name in loaded_credential_tabs:
+            tab_frame = tab_info['frame']
+            platform_creds = current_settings.get("credentials", {}).get(platform_name, {})
+            
+            for child in tab_frame.winfo_children():
+                widget_name = getattr(child, '_w', str(child))
+                
+                for setting_key in tab_info['settings']:
+                    entry_attr = f"{setting_key}_entry"
+                    if hasattr(tab_frame, entry_attr):
+                        entry = getattr(tab_frame, entry_attr)
+                        if isinstance(entry, customtkinter.CTkEntry):
+                            entry.unbind("<KeyRelease>")
+                            
+                            current_val = entry.get()
+                            new_val = platform_creds.get(setting_key, '')
+                            if current_val != new_val:
+                                entry.delete(0, "end")
+                                entry.insert(0, new_val)
+                            
+                            entry.bind("<KeyRelease>", lambda event, p=platform_name, k=setting_key, w=entry: _auto_save_credential_change(p, k, w))
+                        break
+
+def start_login_thread(platform_name):
+    """Starts the login process in a separate thread."""
+    global orpheus_instance, gui_settings, app
+    
+    if orpheus_instance:
+        login_thread = threading.Thread(target=run_login_in_thread, args=(orpheus_instance, platform_name, gui_settings), daemon=True)
+        login_thread.start()
+    else:
+        if not getattr(sys, 'frozen', False):
+            print(f"Orpheus instance not ready, cannot start login for {platform_name}")
+            
 def _auto_save_path_change(*args):
     """Callback triggered when path_var_main changes. Updates in-memory setting AND saves to file."""
     global current_settings, path_var_main, settings_vars, save_status_var, app
@@ -930,7 +954,6 @@ def _auto_save_path_change(*args):
 
         new_path = path_var_main.get()
         if not new_path:
-            print("[Auto Save Path] UI path cleared. No save triggered.")
             return
 
         current_path_in_memory = current_settings.get("globals", {}).get("general", {}).get("output_path")
@@ -945,37 +968,30 @@ def _auto_save_path_change(*args):
             should_save = True 
 
         if should_save:
-            print(f"[Auto Save Path] Path changed in UI: {new_path}. Updating...")
             if "globals" not in current_settings: current_settings["globals"] = {}
             if "general" not in current_settings["globals"]: current_settings["globals"]["general"] = {}
             current_settings["globals"]["general"]["output_path"] = new_path
             if settings_tab_var:
                 settings_tab_var.set(new_path)
-            print(f"[Auto Save Path] Triggering automatic save for path: {new_path}")
             save_successful = save_settings(show_confirmation=False)
-            print(f"[Auto Save Path] Automatic save result: {save_successful}")
             if 'save_status_var' in globals() and save_status_var:
                 status_msg = "Path saved." if save_successful else "Auto-save failed!"
                 save_status_var.set(status_msg)
                 if 'app' in globals() and app and app.winfo_exists():
                     app.after(3000, lambda var=save_status_var, msg=status_msg: var.set("") if var and var.get() == msg else None)
-        else:
-            print(f"[Auto Save Path] Path '{new_path}' matches existing settings. No save triggered.")
     except Exception as e:
         log_file_path = os.path.join(os.getcwd(), 'error_log.txt')
         err_msg = f"Error during automatic path save handling:\\n{type(e).__name__}: {e}"
         full_traceback = traceback.format_exc()
-        print(f"[Auto Save Path] Error: {err_msg}", exc_info=False)
 
         try:
             with open(log_file_path, 'a', encoding='utf-8') as log_f:
                 log_f.write(f"--- Error during _auto_save_path_change ---\\n")
                 log_f.write(f"{err_msg}\\n")
                 log_f.write(f"Full Traceback:\\n{full_traceback}\\n")
-                log_f.write("--------------------------------------------\\n")
+                log_f.write("---------------------------------------------\\n")
             error_message_for_dialog = f"{err_msg}\\n\\nSee 'error_log.txt' in the application folder for details."
         except Exception as log_e:
-            print(f"[Auto Save Path] CRITICAL: Failed to write to error log file: {log_e}")
             error_message_for_dialog = f"{err_msg}\\n\\n(Failed to write details to error_log.txt)"
         if 'save_status_var' in globals() and save_status_var:
             save_status_var.set("Error during auto-save!")
@@ -998,9 +1014,6 @@ def handle_focus_out(widget):
         if hasattr(widget, '_original_fg_color_stored'):
             original_color = widget._original_fg_color_stored
             widget.configure(fg_color=original_color)
-        else:
-            print(f"Warning: Original color not found for {widget} on focus out.")
-            pass
     except Exception as e:
         print(f"Error in handle_focus_out for {widget}: {e}")
 
@@ -2250,25 +2263,26 @@ def display_results(results):
                     )
                 tree.insert("", "end", iid=unique_tree_iid, values=values)
                 item_number += 1
-                if res_id in seen_ids:
-                    print(f"[GUI Debug] Duplicate ID detected: {res_id} (item {item_number-1})", file=sys.__stdout__)
                 seen_ids.add(res_id)
             else:
                 break
         except NameError: break
         except tkinter.TclError as e: 
-            print(f"TclError inserting into treeview (widget destroyed?): {e}", file=sys.__stderr__)
-            print(f"[GUI Debug] Failed to insert item {item_number} with iid '{unique_tree_iid}' and res_id '{res_id}'", file=sys.__stderr__)
+            if not getattr(sys, 'frozen', False):
+                print(f"TclError inserting into treeview (widget destroyed?): {e}", file=sys.__stderr__)
+                print(f"[GUI Debug] Failed to insert item {item_number} with iid '{unique_tree_iid}' and res_id '{res_id}'", file=sys.__stderr__)
             break
         except Exception as e: 
-            print(f"Error inserting into treeview: {e}", file=sys.__stderr__)
-            print(f"[GUI Debug] Failed to insert item {item_number} with iid '{unique_tree_iid}' and res_id '{res_id}'", file=sys.__stderr__)
+            if not getattr(sys, 'frozen', False):
+                print(f"Error inserting into treeview: {e}", file=sys.__stderr__)
     
-    print(f"[GUI Debug] Displayed {len(search_results_data)} items, {len(seen_ids)} unique IDs", file=sys.__stdout__)
     try:
         if 'app' in globals() and app and app.winfo_exists() and 'tree' in globals() and tree and tree.winfo_exists() and 'scrollbar' in globals() and scrollbar and scrollbar.winfo_exists():
             app.after(50, lambda: _check_and_toggle_scrollbar(tree, scrollbar))
     except NameError: pass
+    except Exception as e: 
+        if not getattr(sys, 'frozen', False):
+            print(f"Error scheduling scrollbar check after display: {e}")
     except Exception as e: print(f"Error scheduling scrollbar check after display: {e}")
 
 def run_search_thread_target(orpheus, platform_name, search_type_str, query, gui_settings):
@@ -2787,87 +2801,75 @@ def _update_settings_tab_widgets():
 def _create_credential_tab_content(platform_name, tab_frame):
     """Creates the labels and entry fields for a given platform's credentials."""
     global settings_vars, current_settings, DEFAULT_SETTINGS
-    print(f"Creating content for credential tab: {platform_name}", file=sys.__stdout__)
     try:
         if 'settings_vars' not in globals() or 'credentials' not in settings_vars: settings_vars['credentials'] = {}
         if platform_name not in settings_vars['credentials']: settings_vars['credentials'][platform_name] = {}
         default_platform_fields = DEFAULT_SETTINGS.get("credentials", {}).get(platform_name, {})
-        current_platform_creds = current_settings.get("credentials", {}).get(platform_name, {})
 
-        tab_frame.grid_columnconfigure(1, weight=1)
-        row = 0
-        for field_key, default_value in default_platform_fields.items():
-            current_value = current_platform_creds.get(field_key, default_value)
-            if field_key not in settings_vars['credentials'][platform_name]:
-                if platform_name == "Tidal" and field_key in ["enable_mobile", "prefer_ac4", "fix_mqa"]:
-                    var = tkinter.BooleanVar(value=bool(current_value))
-                else:
-                    var = tkinter.StringVar(value=str(current_value))
-                settings_vars['credentials'][platform_name][field_key] = var
-            else:
-                var = settings_vars['credentials'][platform_name][field_key]
-                if platform_name == "Tidal" and field_key in ["enable_mobile", "prefer_ac4", "fix_mqa"]:
-                    var.set(bool(current_value))
-                else:
-                    var.set(str(current_value))
-            current_pady = (13 if row == 0 else 2, 2)
-            label = customtkinter.CTkLabel(tab_frame, text=f"{field_key.replace('_', ' ').title()}:")
-            label.grid(row=row, column=0, sticky="w", padx=(2, 10), pady=current_pady)
+        if not default_platform_fields:
+            label = customtkinter.CTkLabel(tab_frame, text=f"No configurable credentials for {platform_name}.")
+            label.pack(pady=10, padx=10)
+            return
 
-            if platform_name == "Tidal" and field_key in ["enable_mobile", "prefer_ac4", "fix_mqa"]:
+        for i, (key, value) in enumerate(default_platform_fields.items()):
+            pady_config = (15, 2) if i == 0 else 2
+            label_text = key.replace('_', ' ').title()
+            label = customtkinter.CTkLabel(tab_frame, text=f"{label_text}:")
+            label.grid(row=i, column=0, sticky="w", padx=10, pady=pady_config)
+            
+            current_value = current_settings.get("credentials", {}).get(platform_name, {}).get(key, value)
+
+            if isinstance(value, bool):
+                var = tkinter.BooleanVar(value=current_value)
                 widget = customtkinter.CTkCheckBox(tab_frame, text="", variable=var)
-                widget.grid(row=row, column=1, sticky="w", padx=10, pady=current_pady)
+                widget.grid(row=i, column=1, sticky="w", padx=10, pady=pady_config)
             else:
-                widget = customtkinter.CTkEntry(tab_frame, textvariable=var)
-                widget.grid(row=row, column=1, sticky="ew", padx=10, pady=current_pady)
+                var = tkinter.StringVar(value=str(current_value))
+                widget = customtkinter.CTkEntry(tab_frame)
+                widget.configure(textvariable=var)
+                widget.grid(row=i, column=1, sticky="ew", padx=10, pady=pady_config)
+                tab_frame.grid_columnconfigure(1, weight=1)
                 widget.bind("<Button-3>", show_context_menu)
                 widget.bind("<Button-2>", show_context_menu)
                 widget.bind("<Control-Button-1>", show_context_menu)
                 widget.bind("<FocusIn>", lambda e, w=widget: handle_focus_in(w))
                 widget.bind("<FocusOut>", lambda e, w=widget: handle_focus_out(w))
-            row += 1
-        print(f"Finished creating content for {platform_name}", file=sys.__stdout__)
+            
+            if platform_name not in settings_vars['credentials']:
+                settings_vars['credentials'][platform_name] = {}
+            settings_vars['credentials'][platform_name][key] = var
+            if isinstance(var, (tkinter.StringVar, tkinter.BooleanVar)):
+                var.trace_add('write', _auto_save_credential_change)
     except Exception as e:
-        print(f"Error creating content for credential tab {platform_name}: {e}", file=sys.__stderr__)
         import traceback
         traceback.print_exc(file=sys.__stderr__)
 
 def _handle_settings_tab_change():
-    """Callback function when a tab in the settings_tabview is selected."""
-    global settings_tabview, credential_tab_frames, _created_credential_tabs
-    try:
-        selected_tab_name = settings_tabview.get()
-        print(f"[Settings Tab Change] Selected: {selected_tab_name}", file=sys.__stdout__)
-        if selected_tab_name != "Global" and selected_tab_name not in _created_credential_tabs:
-            print(f"  -> Tab '{selected_tab_name}' needs content creation.", file=sys.__stdout__)
-            internal_platform_name = selected_tab_name
-            tab_frame = credential_tab_frames.get(selected_tab_name)
-
-            if tab_frame:
-                _create_credential_tab_content(internal_platform_name, tab_frame)
-                _created_credential_tabs.add(selected_tab_name)
-                print(f"  -> Content created and tab '{selected_tab_name}' marked as loaded.", file=sys.__stdout__)
-            else:
-                print(f"[ERROR] Could not find frame for credential tab: {selected_tab_name}", file=sys.__stderr__)
-
-    except Exception as e:
-        print(f"Error handling settings tab change for '{selected_tab_name}': {e}", file=sys.__stderr__)
-        import traceback
-        traceback.print_exc(file=sys.__stderr__)
+    global loaded_credential_tabs, settings_tabview, credential_tabs_config
+    selected_tab_name = settings_tabview.get()
+    
+    if selected_tab_name not in loaded_credential_tabs:
+        for tab_name, tab_info in credential_tabs_config.items():
+            if tab_name == selected_tab_name:
+                _create_credential_tab_content(tab_name, tab_info['frame'])
+                loaded_credential_tabs.add(tab_name)
+                break
 
 def update_search_platform_dropdown():
     """Updates the platform dropdown in the Search tab based on current settings AND installed modules."""
     global platform_combo, platform_var, current_settings, DEFAULT_SETTINGS, installed_platform_keys
     if not all(var in globals() for var in ['platform_combo', 'platform_var', 'current_settings', 'DEFAULT_SETTINGS', 'installed_platform_keys']):
-        print("[Update Platforms] Critical variables not found. Skipping update.")
+        if not getattr(sys, 'frozen', False):
+            print("[Update Platforms] Critical variables not found. Skipping update.")
         return
 
     if not platform_combo or not platform_combo.winfo_exists():
-        print("[Update Platforms] Platform combo widget not available. Skipping update.")
+        if not getattr(sys, 'frozen', False):
+            print("[Update Platforms] Platform combo widget not available. Skipping update.")
         return
 
     try:
-        if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+        if not getattr(sys, 'frozen', False) and current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
             print("[Update Platforms] Refreshing Search tab platform dropdown...")
         
         base_available_platforms = [pk for pk in installed_platform_keys if pk != "Musixmatch"]
@@ -2907,18 +2909,22 @@ def update_search_platform_dropdown():
         
         on_platform_change()
 
-        if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
+        if not getattr(sys, 'frozen', False) and current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
             print(f"[Update Platforms] Dropdown updated with: {platforms_to_show}. Selected: {platform_var.get()}")
 
     except tkinter.TclError as e:
         if "invalid command name" in str(e):
-            print(f"[Update Platforms] TclError (widget likely destroyed): {e}")
+            if not getattr(sys, 'frozen', False):
+                print(f"[Update Platforms] TclError (widget likely destroyed): {e}")
         else:
-            print(f"[Update Platforms] TclError: {e}")
+            if not getattr(sys, 'frozen', False):
+                print(f"[Update Platforms] TclError: {e}")
     except Exception as e:
-        print(f"[Update Platforms] Unexpected error: {e}")
+        if not getattr(sys, 'frozen', False):
+            print(f"[Update Platforms] Unexpected error: {e}")
         import traceback
-        traceback.print_exc()
+        if not getattr(sys, 'frozen', False):
+            traceback.print_exc()
 
 def _on_hyperlink_click(event):
     global log_textbox
@@ -3118,6 +3124,10 @@ def run_download_in_thread_responsive(orpheus, url, output_path, gui_settings, s
                 app.after(0, final_cleanup)
         except:
             final_cleanup()
+
+def _auto_save_credential_change(*args):
+    """Callback to save settings when a credential value changes."""
+    save_settings(show_confirmation=False)
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
@@ -3329,22 +3339,18 @@ if __name__ == "__main__":
         y_pos = (screen_height // 2) - (window_height // 2)
         app.geometry(f"{window_width}x{window_height}+{x_pos}+{y_pos}")
 
+        global loaded_credential_tabs, credential_tabs_config
+        loaded_credential_tabs = {"Global"}
+        credential_tabs_config = {}
+
         def _on_tab_change():
             selected_tab = tabview.get()
             if selected_tab == "Search":
-                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-                    print("[Tab Change] Search tab selected, attempting to update platform dropdown.", file=sys.__stdout__)
                 if 'update_search_platform_dropdown' in globals() and callable(update_search_platform_dropdown):
                     app.after(10, update_search_platform_dropdown)
-                else:
-                    print("[Tab Change] update_search_platform_dropdown function not found.", file=sys.__stdout__)
             elif selected_tab == "Settings":
-                if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-                    print("[Tab Change] Settings tab selected, attempting to call _handle_settings_tab_change.", file=sys.__stdout__)
                 if 'settings_tabview' in globals() and settings_tabview and settings_tabview.winfo_exists() and '_handle_settings_tab_change' in globals() and callable(_handle_settings_tab_change):
                      app.after(10, _handle_settings_tab_change)
-                else:
-                    print("[Tab Change] _handle_settings_tab_change or settings_tabview not ready for settings tab.", file=sys.__stdout__)
 
         tabview = customtkinter.CTkTabview(master=app, command=_on_tab_change)
         tabview.pack(padx=10, pady=10, expand=True, fill="both")
@@ -3896,7 +3902,8 @@ Unnecessary Lossless-to-Lossless""",
         sorted_platform_keys_for_tabs = sorted(credential_keys_for_settings_tabs)
         for platform_key in sorted_platform_keys_for_tabs:
             platform_tab_frame = settings_tabview.add(platform_key)
-            credential_tab_frames[platform_key] = platform_tab_frame
+            credential_tabs_config[platform_key] = {'frame': platform_tab_frame}
+        settings_tabview.set("Global")
         save_controls_frame = customtkinter.CTkFrame(settings_tab, fg_color="transparent"); save_controls_frame.pack(side="bottom", anchor="se", padx=10, pady=(0, 10))
         save_status_var = tkinter.StringVar(); save_status_label = customtkinter.CTkLabel(save_controls_frame, textvariable=save_status_var, text_color=("#00C851", "#00C851")); save_status_label.pack(side="left", padx=(0, 10))
         save_button = customtkinter.CTkButton(save_controls_frame, text="Save", width=100, height=30, command=handle_save_settings, fg_color="#343638", hover_color="#1F6AA5"); save_button.pack(side="left", padx=5, pady=(0, 0))
