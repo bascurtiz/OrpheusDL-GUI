@@ -1,25 +1,14 @@
 import os
-# Start of PyInstaller runtime path logic
 import sys
 if getattr(sys, 'frozen', False):
-    # If the application is run as a bundle, the pyInstaller bootloader
-    # extends the sys module by a flag frozen=True.
     application_path = os.path.dirname(sys.executable)
-    
-    # Add the main 'orpheus' package directory
     sys.path.insert(0, application_path)
-    
-    # Add the 'modules' directory for general module loading
     modules_path = os.path.join(application_path, 'modules')
     if os.path.isdir(modules_path):
         sys.path.insert(0, modules_path)
-
-    # Add the specific nested 'gamdl' path required by the applemusic module
-    # This is the parent of the actual 'gamdl' package.
     gamdl_parent_path = os.path.join(application_path, 'modules', 'applemusic', 'gamdl')
     if os.path.isdir(gamdl_parent_path):
         sys.path.insert(0, gamdl_parent_path)
-# End of PyInstaller runtime path logic
 os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
 import copy
 import customtkinter
@@ -50,9 +39,7 @@ from urllib.parse import urlparse
 import traceback
 import logging
 import webbrowser
-import time  # Add time import for yielding
-
-# --- BEGIN asyncio patch for InquirerPy/prompt_toolkit on Windows ---
+import time
 import asyncio
 if sys.platform == "win32":
     try:
@@ -60,7 +47,6 @@ if sys.platform == "win32":
         print("[Patch] Applied asyncio.WindowsSelectorEventLoopPolicy() for Windows.")
     except Exception as e:
         print(f"[Patch] WARNING: Failed to set asyncio.WindowsSelectorEventLoopPolicy(): {e}")
-# --- END asyncio patch ---
 
 _SCRIPT_DIR = None
 
@@ -1240,43 +1226,30 @@ def log_to_textbox(msg, error=False):
             if 'log_textbox' in globals() and log_textbox and log_textbox.winfo_exists():
                 log_textbox.configure(state="disabled")
         except: pass
-
-# Add a state variable to prevent duplicate "unavailable" warnings
 _has_shown_unavailable_warning = False
 
 def update_log_area():
     global output_queue, app, _has_shown_unavailable_warning
     try:
-        # Limit the number of messages processed per call to prevent GUI blocking
         messages_processed = 0
-        max_messages_per_update = 10  # Process more messages for better responsiveness
+        max_messages_per_update = 10
         
         while messages_processed < max_messages_per_update:
             try: 
                 msg = output_queue.get_nowait()
                 msg_strip = msg.strip()
-
-                # 1. Filter out the [Apple Music] startup messages
                 if msg_strip.startswith('[Apple Music]'):
-                    continue # Skip to the next message in the queue
-
-                # 2. Reset the warning flag when a new track begins processing
+                    continue
                 if msg_strip.startswith('=== Downloading track'):
                     _has_shown_unavailable_warning = False
-                
-                # 3. Handle the "unavailable" warning, showing it only once per track
                 if 'This song is currently unavailable.' in msg_strip and msg_strip.startswith('[WARNING]'):
                     if not _has_shown_unavailable_warning:
                         log_to_textbox("[INFO] This song is currently unavailable (might be a pre-release or restricted content).\n")
                         _has_shown_unavailable_warning = True
-                    continue # Discard original and subsequent warnings for this track
-
-                # 4. Shorten the final failure error message
+                    continue
                 if 'Failed after 3 attempts' in msg_strip and msg_strip.startswith('[ERROR]'):
                     log_to_textbox("[ERROR] Failed after 3 attempts.\n", error=True)
                     continue
-
-                # 5. Log all other messages, tagging errors/warnings for color
                 is_error = msg_strip.startswith(('[WARNING]', '[ERROR]'))
                 log_to_textbox(msg, error=is_error)
 
@@ -1286,8 +1259,6 @@ def update_log_area():
             except Exception as e: 
                 print(f"Error processing message from queue: {e}")
                 break
-        
-        # Force GUI update after processing messages
         if 'app' in globals() and app and app.winfo_exists():
             app.update_idletasks()
             
@@ -1296,8 +1267,7 @@ def update_log_area():
     finally:
         try:
             if 'app' in globals() and app and app.winfo_exists():
-                # Schedule next update sooner for responsiveness
-                app.after(50, update_log_area)  # Faster updates (50ms instead of 100ms)
+                app.after(50, update_log_area)
             else:
                 print("[Debug] update_log_area: 'app' not found or destroyed, stopping log polling.")
         except NameError: 
@@ -1531,26 +1501,20 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         except NameError: pass
         except Exception as e: logging.error(f"Error scheduling UI reset after Orpheus instance error: {e}")
         return
-
-    # Aggressive yielding helper
     def yield_to_gui():
         try:
             if 'app' in globals() and app and app.winfo_exists():
                 app.update_idletasks()
-            time.sleep(0.001)  # Very short sleep to release GIL
+            time.sleep(0.001)
         except:
             pass
-
-    # Periodic yielding timer to keep GUI responsive during intensive operations
     yielding_active = threading.Event()
     yielding_active.set()
     
     def periodic_yield():
         while yielding_active.is_set():
             yield_to_gui()
-            time.sleep(0.1)  # Yield every 100ms
-    
-    # Start the periodic yielding thread
+            time.sleep(0.1)
     yield_thread = threading.Thread(target=periodic_yield, daemon=True)
     yield_thread.start()
 
@@ -1561,15 +1525,11 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
     is_cancelled = False
     download_exception_occurred = False
     start_time = datetime.datetime.now()
-
-    # Initial yield
     yield_to_gui()
 
     try:
         sys.stdout = queue_writer
         sys.stderr = dummy_stderr
-        
-        # Yield frequently during setup
         yield_to_gui()
         
         downloader_settings = {
@@ -1931,7 +1891,6 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         else:
             print(f"\nUNEXPECTED ERROR during download thread.\nType: {error_type}\nDetails: {error_repr}\nTraceback:\n{tb_str_generic}")
     finally:
-        # Stop the periodic yielding thread
         yielding_active.clear()
         
         end_time = datetime.datetime.now(); total_duration = end_time - start_time; formatted_time = beauty_format_seconds(total_duration.total_seconds())
@@ -2062,8 +2021,6 @@ def _start_single_download(url_to_download, output_path_final, search_result_dat
         )
         print(f"Starting download thread for: {url_to_download}")
         download_thread.start()
-        
-        # Try to lower thread priority to reduce GUI impact (Windows only)
         if platform.system() == "Windows":
             try:
                 import ctypes
@@ -2566,20 +2523,14 @@ def build_url_from_result(result_data):
             return None
     elif p_lower == "applemusic":
         print(f"[URL Build - Apple Music] Building URL for {t_lower} with ID {item_id}")
-        
-        # Apple Music URLs have format: https://music.apple.com/{country}/{type}/{name}/{id}
-        # We need to construct this properly
-        country = "us"  # Default to US, could be extracted from raw_result if available
-        
-        # Try to extract country from raw result if available
+        country = "us"
         if raw_result_obj:
             try:
-                # Check if we have country info in the raw result
                 if hasattr(raw_result_obj, 'href') and raw_result_obj.href:
                     href_parts = raw_result_obj.href.split('/')
                     if len(href_parts) > 3:
                         potential_country = href_parts[3]
-                        if len(potential_country) == 2:  # Country codes are 2 letters
+                        if len(potential_country) == 2:
                             country = potential_country
                 elif hasattr(raw_result_obj, 'attributes') and 'url' in raw_result_obj.attributes:
                     url_parts = raw_result_obj.attributes['url'].split('/')
@@ -2589,8 +2540,6 @@ def build_url_from_result(result_data):
                             country = potential_country
             except Exception as e:
                 print(f"[URL Build - Apple Music] Could not extract country from raw result: {e}")
-        
-        # Map the type to Apple Music URL format
         type_mapping = {
             "track": "song",
             "album": "album", 
@@ -2599,22 +2548,17 @@ def build_url_from_result(result_data):
         }
         
         apple_music_type = type_mapping.get(t_lower, "song")
-        
-        # Try to get a proper name for the URL from raw result
         url_name = "unknown"
         if raw_result_obj:
             try:
                 if hasattr(raw_result_obj, 'attributes') and 'name' in raw_result_obj.attributes:
                     name = raw_result_obj.attributes['name']
-                    # Slugify the name for URL
                     url_name = _simple_slugify(name) or "unknown"
                 elif hasattr(raw_result_obj, 'name'):
                     name = raw_result_obj.name
                     url_name = _simple_slugify(name) or "unknown"
             except Exception as e:
                 print(f"[URL Build - Apple Music] Could not extract name from raw result: {e}")
-        
-        # Construct the Apple Music URL
         apple_music_url = f"https://music.apple.com/{country}/{apple_music_type}/{url_name}/{item_id}"
         print(f"[URL Build - Apple Music] Constructed URL: {apple_music_url}")
         return apple_music_url
@@ -3047,26 +2991,17 @@ def run_download_in_subprocess(url, output_path, gui_settings, search_result_dat
     """Runs the download in a separate subprocess for complete GUI isolation."""
     import sys
     import os
-    
-    # Re-initialize everything in the subprocess
     try:
-        # Set up the script directory and paths
         script_dir = get_script_directory()
         if script_dir and os.path.isdir(script_dir):
             os.chdir(script_dir)
             if script_dir not in sys.path:
                 sys.path.insert(0, script_dir)
-        
-        # Import Orpheus in the subprocess
         import orpheus.core
         from orpheus.core import Orpheus
         from orpheus.music_downloader import Downloader
         from utils.models import Oprinter
-        
-        # Initialize Orpheus instance in subprocess
         orpheus_subprocess = Orpheus()
-        
-        # Set up logging to send to the main process queue
         class SubprocessQueueWriter:
             def __init__(self, queue_ref):
                 self.queue = queue_ref
@@ -3079,12 +3014,8 @@ def run_download_in_subprocess(url, output_path, gui_settings, search_result_dat
             
             def flush(self):
                 pass
-        
-        # Redirect output to the main process
         queue_writer = SubprocessQueueWriter(output_queue_mp)
         sys.stdout = queue_writer
-        
-        # Run the actual download
         run_download_in_thread(orpheus_subprocess, url, output_path, gui_settings, search_result_data)
         
     except Exception as e:
@@ -3100,8 +3031,6 @@ def final_download_cleanup(success=False):
     try:
         download_process_active = False
         set_ui_state_downloading(False)
-        
-        # Handle batch downloads
         if file_download_queue:
             next_url = file_download_queue.pop(0)
             print(f"Queueing next download from file: {next_url} ({len(file_download_queue)} remaining)")
@@ -3138,13 +3067,11 @@ def run_download_in_thread_responsive(orpheus, url, output_path, gui_settings, s
         except NameError: pass
         except Exception as e: logging.error(f"Error scheduling UI reset after Orpheus instance error: {e}")
         return
-
-    # Aggressive yielding helper
     def yield_to_gui(duration=0.001):
         time.sleep(duration)
         if 'app' in globals() and app:
             try:
-                app.update_idletasks()  # Process pending GUI events
+                app.update_idletasks()
             except:
                 pass
 
@@ -3155,15 +3082,11 @@ def run_download_in_thread_responsive(orpheus, url, output_path, gui_settings, s
     is_cancelled = False
     download_exception_occurred = False
     start_time = datetime.datetime.now()
-
-    # Initial yield
     yield_to_gui(0.01)
 
     try:
         sys.stdout = queue_writer
         sys.stderr = dummy_stderr
-        
-        # Yield frequently during setup
         yield_to_gui()
         
         downloader_settings = {
@@ -3176,16 +3099,8 @@ def run_download_in_thread_responsive(orpheus, url, output_path, gui_settings, s
         }
         
         yield_to_gui()
-        
-        # Continue with the same download logic but with frequent yielding...
-        # For brevity, I'll reference the existing download logic from run_download_in_thread
-        # but add yield_to_gui() calls throughout
-        
-        # This is a wrapper that calls the original download function but with yielding
         def yielding_download():
             return run_download_in_thread(orpheus, url, output_path, gui_settings, search_result_data)
-        
-        # Run download with periodic yielding
         download_result = yielding_download()
         
     except Exception as e:
@@ -3193,8 +3108,6 @@ def run_download_in_thread_responsive(orpheus, url, output_path, gui_settings, s
     finally:
         sys.stdout = original_stdout
         sys.stderr = original_stderr
-        
-        # Final cleanup
         def final_cleanup():
             global download_process_active
             download_process_active = False
@@ -4063,7 +3976,7 @@ Unnecessary Lossless-to-Lossless""",
         modules_title.pack(pady=(20, 5))
         modules_frame = customtkinter.CTkFrame(about_frame, fg_color="transparent"); modules_frame.pack(fill="x", padx=20, pady=(0, 10))
         module_buttons_data = [
-            ("Apple Music", "https://github.com/yarrm80s/orpheusdl-applemusic-basic"),
+            ("Apple Music", "https://github.com/bascurtiz/orpheusdl-applemusic"),
             ("Beatport", "https://github.com/bascurtiz/orpheusdl-beatport"),
             ("Beatsource", "https://github.com/bascurtiz/orpheusdl-beatsource"),
             ("Bugs", "https://github.com/Dniel97/orpheusdl-bugsmusic"),
