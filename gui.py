@@ -364,7 +364,7 @@ if platform.system() == "Windows":
                     kwargs['startupinfo'] = startupinfo
                     
             except Exception as e:
-                print(f"[Patch Warning] Could not set subprocess flags to hide console: {e}", file=sys.stderr__)
+                print(f"[Patch Warning] Could not set subprocess flags to hide console: {e}", file=sys.__stderr__)
             
             super().__init__(*args, **kwargs)
     
@@ -1173,11 +1173,14 @@ def log_to_textbox(msg, error=False):
         else:
             content_to_insert = msg
         if "=== Track" in content_to_insert and "downloaded ===" in content_to_insert and not "completed" in content_to_insert:
-            content_to_insert = "=== Track completed ===\n"
+            leading_whitespace = content_to_insert[:len(content_to_insert) - len(content_to_insert.lstrip())]
+            content_to_insert = f"{leading_whitespace}=== Track completed ===\n\n"
         elif "=== Track" in content_to_insert and "skipped ===" in content_to_insert and not content_to_insert.strip() == "=== Track skipped ===":
-            content_to_insert = "=== Track skipped ===\n"
+            leading_whitespace = content_to_insert[:len(content_to_insert) - len(content_to_insert.lstrip())]
+            content_to_insert = f"{leading_whitespace}=== Track skipped ===\n\n"
         elif "=== Track" in content_to_insert and "failed (" in content_to_insert and ") ===" in content_to_insert:
-            content_to_insert = "=== Track failed ===\n"
+            leading_whitespace = content_to_insert[:len(content_to_insert) - len(content_to_insert.lstrip())]
+            content_to_insert = f"{leading_whitespace}=== Track failed ===\n\n"
         
         is_current_empty = not content_to_insert.strip()
         if is_current_empty and _last_message_was_empty: return
@@ -1464,15 +1467,35 @@ def _check_and_toggle_text_scrollbar(text_widget, scrollbar_widget):
             print(f"Error checking/toggling text scrollbar: {e}")
 
 class QueueWriter(io.TextIOBase):
-    def __init__(self, queue_instance):
+    def __init__(self, queue_instance, media_type=None):
         self.queue = queue_instance
         self.buffer = ''
+        self.media_type = media_type
+        self.MESSAGES_TO_INDENT = [
+            "Downloading encrypted stream...",
+            "Getting decryption key...",
+            "Processing with legacy remux...",
+            "Applying Apple Music metadata...",
+        ]
 
     def write(self, msg):
         self.buffer += msg
         if '\n' in self.buffer:
             lines = self.buffer.split('\n')
             for line in lines[:-1]:
+                if self.media_type in [DownloadTypeEnum.album, DownloadTypeEnum.playlist, DownloadTypeEnum.artist]:
+                    stripped_line = line.lstrip()
+                    # Fix indentation for messages that are incorrectly indented by the core library
+                    if any(stripped_line.startswith(prefix) for prefix in self.MESSAGES_TO_INDENT):
+                        # These messages come with 1 level of indent (8 spaces) but need 2 (16 spaces)
+                        if line.startswith('        ') and not line.startswith('            '):
+                            line = '        ' + line
+                    # The 'completed' message is modified in log_to_textbox, so we fix the source 'downloaded' message here
+                    elif "=== Track" in stripped_line and "downloaded ===" in stripped_line:
+                        # This should be at indent level 1 (8 spaces)
+                        if not line.startswith('        '):
+                            line = "        " + stripped_line
+
                 self.queue.put(line + '\n')
             self.buffer = lines[-1]
         return len(msg)
@@ -1527,14 +1550,15 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
 
     original_stdout = sys.stdout
     original_stderr = sys.stderr
-    queue_writer = QueueWriter(output_queue)
     dummy_stderr = DummyStderr()
     is_cancelled = False
     download_exception_occurred = False
     start_time = datetime.datetime.now()
+    media_type = None
     yield_to_gui()
 
     try:
+        queue_writer = QueueWriter(output_queue, media_type=media_type)
         sys.stdout = queue_writer
         sys.stderr = dummy_stderr
         yield_to_gui()
@@ -1638,6 +1662,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             downloader.service = orpheus.load_module(module_name)
             downloader.service_name = module_name
             downloader.download_mode = media_type
+            queue_writer.media_type = media_type
             
             yield_to_gui()
             
@@ -1684,7 +1709,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                     for k, v in raw_tags.items():
                         if isinstance(v, (str, int, bool, float)): playlist_tags[k] = re.sub(r'[\\/:*?"<>|]', '_', str(v)).strip() if isinstance(v, str) else v
                     playlist_tags['explicit'] = ' [E]' if playlist_info.explicit else ''; playlist_path_format = downloader_settings['formatting']['playlist_format']
-                    output_queue.put(f"Starting playlist download: '{playlist_info.name}' ({num_tracks} tracks)\n")
+                    output_queue.put(f" Starting playlist download: '{playlist_info.name}' ({num_tracks} tracks)\n")
                     try: relative_playlist_path = playlist_path_format.format(**playlist_tags)
                     except KeyError as fmt_e: print(f"[Warning] Formatting KeyError for playlist path: {fmt_e}. Using default name."); relative_playlist_path = f"Playlist_{media_id}"
                     relative_playlist_path = re.sub(r'[\\/:*?"<>|]', '_', relative_playlist_path).strip(); full_playlist_path = os.path.join(output_path, relative_playlist_path) + '/'; os.makedirs(full_playlist_path, exist_ok=True)
@@ -1694,11 +1719,9 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                         
                         yield_to_gui()
                         
-                        output_queue.put("\n")
                         oprinter.oprint(f"Processing playlist track {index}/{num_tracks}: {track_id}")
-                        percentage = (index / num_tracks) * 100; output_queue.put(f"Progress: Track {index}/{num_tracks} ({percentage:.0f}%)"); output_queue.put('\n\n')
+                        percentage = (index / num_tracks) * 100; output_queue.put(f"Progress: Track {index}/{num_tracks} ({percentage:.0f}%)"); output_queue.put('\n')
                         downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=full_playlist_path, track_index=index, number_of_tracks=num_tracks, extra_kwargs=playlist_info.track_extra_kwargs)
-                        output_queue.put('\n')
                         
                         yield_to_gui()
                 else: oprinter.oprint(f"Could not retrieve playlist info or playlist is empty.")
@@ -1725,18 +1748,17 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                      oprinter.oprint(f"[Error] Failed to get album info for {media_id}: {e}")
 
                 if album_info and album_info.tracks:
-                    num_tracks = len(album_info.tracks); output_queue.put(f"Starting album download: '{album_info.name}' ({num_tracks} tracks)\n")
+                    num_tracks = len(album_info.tracks); output_queue.put(f" Starting album download: '{album_info.name}' ({num_tracks} tracks)\n")
                     album_path = downloader._create_album_location(output_path, media_id, album_info); downloader.print(f'=== Downloading album {album_info.name} ({media_id}) ==='); downloader._download_album_files(album_path, album_info)
                     for index, track_id in enumerate(album_info.tracks, start=1):
                         if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before track {index}/{num_tracks}."); break
                         
                         yield_to_gui()
                         
-                        output_queue.put("\n")
-                        downloader.set_indent_number(2); oprinter.oprint(f"Processing album track {index}/{num_tracks}: {track_id}")
-                        percentage = (index / num_tracks) * 100; output_queue.put(f"Progress: Track {index}/{num_tracks} ({percentage:.0f}%)"); output_queue.put('\n\n')
+                        track_name = track_id.name if hasattr(track_id, 'name') else str(track_id)
+                        downloader.set_indent_number(2); oprinter.oprint(f"Processing album track {index}/{num_tracks}: {track_name}")
+                        percentage = (index / num_tracks) * 100; output_queue.put(f"                Progress: Track {index}/{num_tracks} ({percentage:.0f}%)\n")
                         downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=album_path, track_index=index, number_of_tracks=num_tracks, extra_kwargs=album_info.track_extra_kwargs, indent_level=2)
-                        output_queue.put('\n')
                         
                         yield_to_gui()
                     downloader.set_indent_number(1)
@@ -1765,7 +1787,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                     artist_name = artist_info.name; oprinter.oprint(f"=== Downloading artist {artist_name} ({media_id}) ===")
                     sanitized_artist_name = re.sub(r'[\\/:*?"<>|]', '_', artist_name).strip(); artist_path = os.path.join(output_path, sanitized_artist_name) + '/'; os.makedirs(artist_path, exist_ok=True)
                     num_albums = len(artist_info.albums); tracks_downloaded_in_albums = []
-                    output_queue.put(f"Starting artist download: '{artist_name}' ({num_albums} albums + {len(artist_info.tracks)} potential tracks)\n")
+                    output_queue.put(f" Starting artist download: '{artist_name}' ({num_albums} albums + {len(artist_info.tracks)} potential tracks)\n")
                     oprinter.oprint(f"Processing {num_albums} albums...")
 
                     for index, album_id in enumerate(artist_info.albums, start=1):
@@ -1804,7 +1826,8 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                                  yield_to_gui()
                                  
                                  output_queue.put("\n")
-                                 downloader.set_indent_number(3); oprinter.oprint(f"Processing album track {track_index}/{num_album_tracks}: {track_id}")
+                                 track_name_album = track_id.name if hasattr(track_id, 'name') else str(track_id)
+                                 downloader.set_indent_number(3); oprinter.oprint(f"Processing album track {track_index}/{num_album_tracks}: {track_name_album}")
                                  track_percentage = (track_index / num_album_tracks) * 100; output_queue.put(f"  -> Album Track {track_index}/{num_album_tracks} ({track_percentage:.0f}%)"); output_queue.put('\n\n')
                                  downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=album_path, track_index=track_index, number_of_tracks=num_album_tracks, main_artist=artist_name, extra_kwargs=album_info_for_artist.track_extra_kwargs, indent_level=3)
                                  output_queue.put('\n'); tracks_downloaded_in_albums.append(str(track_id.id) if hasattr(track_id, 'id') else str(track_id))
@@ -1909,7 +1932,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             pass
         else:
             final_status_message = "Download Finished." 
-            print(final_status_message + "\n")
+            print("\n" + final_status_message + "\n")
         
         print(time_taken_message)
         print("\n\n")
@@ -3078,14 +3101,15 @@ def run_download_in_thread_responsive(orpheus, url, output_path, gui_settings, s
 
     original_stdout = sys.stdout
     original_stderr = sys.stderr
-    queue_writer = QueueWriter(output_queue)
     dummy_stderr = DummyStderr()
     is_cancelled = False
     download_exception_occurred = False
     start_time = datetime.datetime.now()
+    media_type = None
     yield_to_gui(0.01)
 
     try:
+        queue_writer = QueueWriter(output_queue, media_type=media_type)
         sys.stdout = queue_writer
         sys.stderr = dummy_stderr
         yield_to_gui()
