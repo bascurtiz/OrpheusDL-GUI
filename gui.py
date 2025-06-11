@@ -1913,7 +1913,6 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                         
                         yield_to_gui()
                         
-                        output_queue.put("\n")
                         oprinter.oprint(f"Processing album {index}/{num_albums}")
                         data_dict_for_album = {}
                         album_info_for_artist = None
