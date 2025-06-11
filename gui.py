@@ -53,13 +53,18 @@ _SCRIPT_DIR = None
 SERVICE_COLORS = {
     "tidal": "#33ffe7",
     "jiosaavn": "#1eccb0",
-    "apple music": "#fb233c",
+    "apple music": "#FA586A",
     "beatport": "#00ff89",
     "beatsource": "#16a8f4",
     "deezer": "#a238ff",
     "qobuz": "#0070ef",
     "soundcloud": "#ff5502",
-    "spotify": "#1cc659"
+    "spotify": "#1cc659",
+    "napster": "#295EFF",
+    "kkbox": "#27B1D8",
+    "idagio": "#5C34FE",
+    "bugs": "#FF3B28",
+    "nugs": "#C83B30"
 }
 
 SERVICE_DISPLAY_NAMES = {
@@ -71,7 +76,12 @@ SERVICE_DISPLAY_NAMES = {
     "deezer": "Deezer",
     "qobuz": "Qobuz",
     "soundcloud": "SoundCloud",
-    "spotify": "Spotify"
+    "spotify": "Spotify",
+    "napster": "Napster",
+    "kkbox": "KKBOX",
+    "idagio": "IDAGIO",
+    "bugs": "Bugs!",
+    "nugs": "Nugs.net"
 }
 
 def _simple_slugify(text):
@@ -90,6 +100,7 @@ class DummyStderr:
 file_download_queue = []
 output_queue = queue.Queue()
 current_batch_output_path = None
+_current_download_context = None
 
 _queue_log_handler_instance = None
 
@@ -364,7 +375,7 @@ if platform.system() == "Windows":
                     kwargs['startupinfo'] = startupinfo
                     
             except Exception as e:
-                print(f"[Patch Warning] Could not set subprocess flags to hide console: {e}", file=sys.__stderr__)
+                print(f"[Patch Warning] Could not set subprocess flags to hide console: {e}", file=sys.stderr__)
             
             super().__init__(*args, **kwargs)
     
@@ -1174,13 +1185,13 @@ def log_to_textbox(msg, error=False):
             content_to_insert = msg
         if "=== Track" in content_to_insert and "downloaded ===" in content_to_insert and not "completed" in content_to_insert:
             leading_whitespace = content_to_insert[:len(content_to_insert) - len(content_to_insert.lstrip())]
-            content_to_insert = f"{leading_whitespace}=== Track completed ===\n\n"
+            content_to_insert = f"{leading_whitespace}=== ✅ Track completed ===\n\n"
         elif "=== Track" in content_to_insert and "skipped ===" in content_to_insert and not content_to_insert.strip() == "=== Track skipped ===":
             leading_whitespace = content_to_insert[:len(content_to_insert) - len(content_to_insert.lstrip())]
-            content_to_insert = f"{leading_whitespace}=== Track skipped ===\n\n"
+            content_to_insert = f"{leading_whitespace}=== ⚠ Track skipped ===\n\n"
         elif "=== Track" in content_to_insert and "failed (" in content_to_insert and ") ===" in content_to_insert:
             leading_whitespace = content_to_insert[:len(content_to_insert) - len(content_to_insert.lstrip())]
-            content_to_insert = f"{leading_whitespace}=== Track failed ===\n\n"
+            content_to_insert = f"{leading_whitespace}=== ❌ Track failed ===\n\n"
         
         is_current_empty = not content_to_insert.strip()
         if is_current_empty and _last_message_was_empty: return
@@ -1195,15 +1206,39 @@ def log_to_textbox(msg, error=False):
                 log_textbox.tag_configure("downloaded_track", foreground="#00C851")
                 log_textbox.tag_configure("normal", foreground="")
                 log_textbox.tag_configure("hyperlink", foreground="royal blue", underline=True)
+                log_textbox.tag_configure("emoji_success", foreground="#00C851")
+                log_textbox.tag_configure("emoji_error", foreground="#FF4444")
+                log_textbox.tag_configure("emoji_warning", foreground="#FFBF00")
                 log_textbox.tag_bind("hyperlink", "<Enter>", lambda e: log_textbox.config(cursor="hand2"))
                 log_textbox.tag_bind("hyperlink", "<Leave>", lambda e: log_textbox.config(cursor=""))
                 log_textbox.tag_bind("hyperlink", "<Button-1>", _on_hyperlink_click)
                 for service, color in SERVICE_COLORS.items():
                     log_textbox.tag_configure(f"service_{service.replace(' ', '_')}", foreground=color)
             except: pass
+            def insert_track_status_with_colored_emoji(text_content):
+                """Insert track status message with colored emoji and default text"""
+                if "=== ✅ Track completed ===" in text_content:
+                    parts = text_content.split("✅")
+                    log_textbox.insert("end", parts[0])
+                    log_textbox.insert("end", "✅", ("emoji_success",))
+                    log_textbox.insert("end", parts[1])
+                    return True
+                elif "=== ❌ Track failed ===" in text_content:
+                    parts = text_content.split("❌")
+                    log_textbox.insert("end", parts[0])
+                    log_textbox.insert("end", "❌", ("emoji_error",))
+                    log_textbox.insert("end", parts[1])
+                    return True
+                elif "=== ⚠ Track skipped ===" in text_content:
+                    parts = text_content.split("⚠")
+                    log_textbox.insert("end", parts[0])
+                    log_textbox.insert("end", "⚠", ("emoji_warning",))
+                    log_textbox.insert("end", parts[1])
+                    return True
+                return False
 
             url_regex = r'(https?://[^\s<>"]+|www\\.[^\s<>"]+)'
-            service_regex = r'Service: (' + '|'.join(re.escape(s) for s in SERVICE_COLORS.keys()) + ')'
+            service_regex = r'Platform: (' + '|'.join(re.escape(s) for s in SERVICE_COLORS.keys()) + ')'
             
             combined_regex = f'({url_regex})|({service_regex})'
             matches = list(re.finditer(combined_regex, content_to_insert, re.IGNORECASE))
@@ -1212,68 +1247,66 @@ def log_to_textbox(msg, error=False):
                 last_end = 0
                 for match in matches:
                     start, end = match.span()
-                    
-                    # Insert the text before the current match
                     if start > last_end:
                         non_match_segment = content_to_insert[last_end:start]
-                        # Determine tag for this non-match segment (existing logic)
-                        tag_for_segment = "normal"
-                        if "=== Track" in non_match_segment and ("downloaded ===" in non_match_segment or "completed ===" in non_match_segment): tag_for_segment = "downloaded_track"
-                        elif "=== Track" in non_match_segment and "skipped ===" in non_match_segment: tag_for_segment = "skipped_track"
-                        elif "=== Track" in non_match_segment and (("failed (" in non_match_segment and ") ===" in non_match_segment) or "failed ===" in non_match_segment): tag_for_segment = "error"
-                        elif ("[INFO]" in non_match_segment or "[WARNING]" in non_match_segment or 
-                              "[ERROR]" in non_match_segment or "[CRITICAL]" in non_match_segment): tag_for_segment = "detail_text"
-                        elif ("Download stop requested..." in non_match_segment or 
-                              non_match_segment.strip() == "Download Cancelled." or 
-                              non_match_segment.strip() == "Download Cancelled (during file transfer)."): tag_for_segment = "skipped_track"
-                        elif "Track file already exists" in non_match_segment: tag_for_segment = "detail_text"
-                        log_textbox.insert("end", non_match_segment, (tag_for_segment,))
-
-                    # Check which part of the combined regex matched
+                        if not insert_track_status_with_colored_emoji(non_match_segment):
+                            tag_for_segment = "normal"
+                            if "=== Track" in non_match_segment and ("downloaded ===" in non_match_segment or "completed ===" in non_match_segment): tag_for_segment = "downloaded_track"
+                            elif "=== Track" in non_match_segment and "skipped ===" in non_match_segment: tag_for_segment = "skipped_track"
+                            elif "=== Track" in non_match_segment and (("failed (" in non_match_segment and ") ===" in non_match_segment) or "failed ===" in non_match_segment): tag_for_segment = "error"
+                            elif ("[INFO]" in non_match_segment or "[WARNING]" in non_match_segment or 
+                                  "[ERROR]" in non_match_segment or "[CRITICAL]" in non_match_segment): tag_for_segment = "detail_text"
+                            elif "Download stop requested..." in non_match_segment: tag_for_segment = "detail_text"
+                            elif "Track file already exists" in non_match_segment: tag_for_segment = "detail_text"
+                            elif "This song is currently unavailable" in non_match_segment: tag_for_segment = "detail_text"
+                            elif "Stop requested. Cancelling before" in non_match_segment: tag_for_segment = "detail_text"
+                            log_textbox.insert("end", non_match_segment, (tag_for_segment,))
                     matched_text = content_to_insert[start:end]
                     if re.fullmatch(url_regex, matched_text, re.IGNORECASE):
-                        # It's a URL
                         log_textbox.insert("end", matched_text, ("hyperlink",))
                     elif re.search(service_regex, matched_text, re.IGNORECASE):
-                        # It's a service line
                         service_name_match = re.search(r'(' + '|'.join(re.escape(s) for s in SERVICE_COLORS.keys()) + ')', matched_text, re.IGNORECASE)
                         if service_name_match:
                             service_name_from_match = service_name_match.group(1).lower()
                             service_display_name = SERVICE_DISPLAY_NAMES.get(service_name_from_match, service_name_from_match)
                             service_tag = f"service_{service_name_from_match.replace(' ', '_')}"
                             
-                            prefix = "Service: "
-                            log_textbox.insert("end", prefix) # Insert "Service: " with default color
-                            log_textbox.insert("end", service_display_name, (service_tag,)) # Insert service name with color
+                            prefix = "Platform: "
+                            log_textbox.insert("end", prefix)
+                            log_textbox.insert("end", service_display_name, (service_tag,))
                     
                     last_end = end
-                
-                # Insert any remaining text after the last match
                 if last_end < len(content_to_insert):
                     remaining_segment = content_to_insert[last_end:]
-                    tag_for_segment = "normal"
-                    if "=== Track" in remaining_segment and ("downloaded ===" in remaining_segment or "completed ===" in remaining_segment): tag_for_segment = "downloaded_track"
-                    elif "=== Track" in remaining_segment and "skipped ===" in remaining_segment: tag_for_segment = "skipped_track"
-                    elif "=== Track" in remaining_segment and (("failed (" in remaining_segment and ") ===" in remaining_segment) or "failed ===" in remaining_segment): tag_for_segment = "error"
-                    elif ("[INFO]" in remaining_segment or "[WARNING]" in remaining_segment or 
-                          "[ERROR]" in remaining_segment or "[CRITICAL]" in remaining_segment): tag_for_segment = "detail_text"
-                    elif ("Download stop requested..." in remaining_segment or 
-                          remaining_segment.strip() == "Download Cancelled." or 
-                          remaining_segment.strip() == "Download Cancelled (during file transfer)."): tag_for_segment = "skipped_track"
-                    elif "Track file already exists" in remaining_segment: tag_for_segment = "detail_text"
-                    log_textbox.insert("end", remaining_segment, (tag_for_segment,))
+                    if not insert_track_status_with_colored_emoji(remaining_segment):
+                        tag_for_segment = "normal"
+                        if "=== Track" in remaining_segment and ("downloaded ===" in remaining_segment or "completed ===" in remaining_segment): tag_for_segment = "downloaded_track"
+                        elif "=== Track" in remaining_segment and "skipped ===" in remaining_segment: tag_for_segment = "skipped_track"
+                        elif "=== Track" in remaining_segment and (("failed (" in remaining_segment and ") ===" in remaining_segment) or "failed ===" in remaining_segment): tag_for_segment = "error"
+                        elif ("[INFO]" in remaining_segment or "[WARNING]" in remaining_segment or 
+                              "[ERROR]" in remaining_segment or "[CRITICAL]" in remaining_segment): tag_for_segment = "detail_text"
+                        elif "Download stop requested..." in remaining_segment: tag_for_segment = "detail_text"
+                        elif "Track file already exists" in remaining_segment: tag_for_segment = "detail_text"
+                        elif "This song is currently unavailable" in remaining_segment: tag_for_segment = "detail_text"
+                        elif ("Stop requested. Cancelling before" in remaining_segment or 
+                              "Stop requested. Cancelling during" in remaining_segment): tag_for_segment = "detail_text"
+                        elif "Track is not from the correct artist, skipping" in remaining_segment: tag_for_segment = "detail_text"
+                        log_textbox.insert("end", remaining_segment, (tag_for_segment,))
             else:
-                tag_to_use = "normal"
-                if "=== Track" in content_to_insert and ("downloaded ===" in content_to_insert or "completed ===" in content_to_insert): tag_to_use = "downloaded_track"
-                elif "=== Track" in content_to_insert and "skipped ===" in content_to_insert: tag_to_use = "skipped_track"
-                elif "=== Track" in content_to_insert and (("failed (" in content_to_insert and ") ===" in content_to_insert) or "failed ===" in content_to_insert): tag_to_use = "error"
-                elif ("[INFO]" in content_to_insert or "[WARNING]" in content_to_insert or 
-                      "[ERROR]" in content_to_insert or "[CRITICAL]" in content_to_insert): tag_to_use = "detail_text"
-                elif ("Download stop requested..." in content_to_insert or 
-                      content_to_insert.strip() == "Download Cancelled." or 
-                      content_to_insert.strip() == "Download Cancelled (during file transfer)."): tag_to_use = "skipped_track"
-                elif "Track file already exists" in content_to_insert: tag_to_use = "detail_text"
-                log_textbox.insert("end", content_to_insert, (tag_to_use,))
+                if not insert_track_status_with_colored_emoji(content_to_insert):
+                    tag_to_use = "normal"
+                    if "=== Track" in content_to_insert and ("downloaded ===" in content_to_insert or "completed ===" in content_to_insert): tag_to_use = "downloaded_track"
+                    elif "=== Track" in content_to_insert and "skipped ===" in content_to_insert: tag_to_use = "skipped_track"
+                    elif "=== Track" in content_to_insert and (("failed (" in content_to_insert and ") ===" in content_to_insert) or "failed ===" in content_to_insert): tag_to_use = "error"
+                    elif ("[INFO]" in content_to_insert or "[WARNING]" in content_to_insert or 
+                          "[ERROR]" in content_to_insert or "[CRITICAL]" in content_to_insert): tag_to_use = "detail_text"
+                    elif "Download stop requested..." in content_to_insert: tag_to_use = "detail_text"
+                    elif "Track file already exists" in content_to_insert: tag_to_use = "detail_text"
+                    elif "This song is currently unavailable" in content_to_insert: tag_to_use = "detail_text"
+                    elif ("Stop requested. Cancelling before" in content_to_insert or 
+                          "Stop requested. Cancelling during" in content_to_insert): tag_to_use = "detail_text"
+                    elif "Track is not from the correct artist, skipping" in content_to_insert: tag_to_use = "detail_text"
+                    log_textbox.insert("end", content_to_insert, (tag_to_use,))
 
             log_textbox.see("end")
             log_textbox.configure(state="disabled")
@@ -1293,10 +1326,12 @@ def log_to_textbox(msg, error=False):
 _has_shown_unavailable_warning = False
 
 def update_log_area():
-    global output_queue, app, _has_shown_unavailable_warning
+    global output_queue, app, _has_shown_unavailable_warning, _current_download_context
     try:
         messages_processed = 0
-        max_messages_per_update = 10
+        max_messages_per_update = 5
+        start_time = time.time()
+        max_processing_time = 0.02
         
         while messages_processed < max_messages_per_update:
             try: 
@@ -1306,18 +1341,72 @@ def update_log_area():
                     continue
                 if msg_strip.startswith('=== Downloading track'):
                     _has_shown_unavailable_warning = False
-                if 'This song is currently unavailable.' in msg_strip and msg_strip.startswith('[WARNING]'):
+                if 'This song is currently unavailable' in msg_strip:
                     if not _has_shown_unavailable_warning:
-                        log_to_textbox("[INFO] This song is currently unavailable (might be a pre-release or restricted content).\n")
+                        indentation = "       "
+                        log_to_textbox(f"{indentation}This song is currently unavailable.\n")
                         _has_shown_unavailable_warning = True
                     continue
                 if 'Failed after 3 attempts' in msg_strip and msg_strip.startswith('[ERROR]'):
-                    log_to_textbox("[ERROR] Failed after 3 attempts.\n", error=True)
+                    log_to_textbox("       [ERROR] Failed after 3 attempts.\n", error=True)
+                    continue
+                if 'Track is not from the correct artist, skipping' in msg_strip:
+                    log_to_textbox("Track is not from the correct artist, skipping\n")
+                    continue
+                if 'Pausing for' in msg_strip and 'seconds before next download attempt' in msg_strip:
+                    log_to_textbox(msg)
+                    log_to_textbox("\n")
+                    continue
+                if '[CRITICAL]' in msg_strip and 'Librespot:Session' in msg_strip and 'Failed reading packet!' in msg_strip:
+                    continue
+                if 'Download stop requested...' in msg_strip:
+                    log_to_textbox("       Download stop requested...\n")
+                    continue
+                if 'tracks in playlist... Please wait.' in msg_strip:
+                    fixed_message = msg_strip.lstrip()
+                    log_to_textbox(f"{fixed_message}\n")
+                    continue
+                if msg_strip.startswith('Fetching ') and any(char.isdigit() for char in msg_strip) and '===' not in msg_strip:
+                    log_to_textbox(f"{msg_strip}\n")
+                    log_to_textbox("\n")
+                    continue
+                if msg_strip.startswith('Fetching ') and '=== Downloading artist' in msg_strip:
+                    parts = msg_strip.split('=== Downloading artist')
+                    if len(parts) >= 2:
+                        fetching_part = parts[0].strip()
+                        fetch_parts = fetching_part.split('Fetching ')
+                        for i, part in enumerate(fetch_parts):
+                            if part.strip():
+                                if i == 0:
+                                    log_to_textbox(f"{part.strip()}\n")
+                                else:
+                                    log_to_textbox(f"Fetching {part.strip()}\n")
+                        log_to_textbox(f"=== Downloading artist{parts[1]}\n")
+                        continue
+                if 'Processing' in msg_strip and 'standalone tracks...' in msg_strip and 'Artist Progress:' in msg_strip:
+                    log_to_textbox(f"{msg}\n")
+                    continue
+                if 'Spotify authentication error during track download' in msg_strip or \
+                   ('Download attempt' in msg_strip and 'failed. Retrying in' in msg_strip):
+                    cleaned_message = msg_strip
+                    if 'Spotify authentication error during track download' in msg_strip and 'Failed fetching audio key!' in msg_strip:
+                        cleaned_message = msg_strip.split('Failed fetching audio key!')[0] + 'Failed fetching audio key!'
+                    indented_message = f"       {cleaned_message}\n"
+                    log_to_textbox(indented_message)
+                    continue
+                if '=== ✅ Track completed ===' in msg_strip:
+                    log_to_textbox(msg)
                     continue
                 is_error = msg_strip.startswith(('[WARNING]', '[ERROR]'))
-                log_to_textbox(msg, error=is_error)
+                if is_error and (('Download attempt' in msg_strip and ('failed' in msg_strip or 'Retrying' in msg_strip)) or 
+                                'Failed after 3 attempts' in msg_strip):
+                    log_to_textbox(f"       {msg_strip}\n", error=is_error)
+                else:
+                    log_to_textbox(msg, error=is_error)
 
                 messages_processed += 1
+                if time.time() - start_time > max_processing_time:
+                    break
             except queue.Empty: 
                 break
             except Exception as e: 
@@ -1331,7 +1420,9 @@ def update_log_area():
     finally:
         try:
             if 'app' in globals() and app and app.winfo_exists():
-                app.after(50, update_log_area)
+                queue_size = output_queue.qsize() if output_queue else 0
+                update_interval = min(100, max(25, queue_size * 2))
+                app.after(update_interval, update_log_area)
             else:
                 print("[Debug] update_log_area: 'app' not found or destroyed, stopping log polling.")
         except NameError: 
@@ -1483,18 +1574,35 @@ class QueueWriter(io.TextIOBase):
         if '\n' in self.buffer:
             lines = self.buffer.split('\n')
             for line in lines[:-1]:
-                if self.media_type in [DownloadTypeEnum.album, DownloadTypeEnum.playlist, DownloadTypeEnum.artist]:
+                if self.media_type == DownloadTypeEnum.artist:
                     stripped_line = line.lstrip()
-                    # Fix indentation for messages that are incorrectly indented by the core library
-                    if any(stripped_line.startswith(prefix) for prefix in self.MESSAGES_TO_INDENT):
-                        # These messages come with 1 level of indent (8 spaces) but need 2 (16 spaces)
-                        if line.startswith('        ') and not line.startswith('            '):
-                            line = '        ' + line
-                    # The 'completed' message is modified in log_to_textbox, so we fix the source 'downloaded' message here
+                    if ("Processing album track" in stripped_line or 
+                        "-> Album Track" in stripped_line or
+                        "Processing album" in stripped_line or
+                        "Fetching SoundCloud album metadata" in stripped_line or
+                        "Downloading album cover" in stripped_line or
+                        ("=== Track" in stripped_line and "downloaded ===" in stripped_line)):
+                        line = stripped_line
+                    elif line.startswith('        ') and not line.startswith('         ') and not line.startswith('=== '):
+                        line = line[1:]
+                elif self.media_type == DownloadTypeEnum.playlist:
+                    stripped_line = line.lstrip()
+                    if line.startswith('        ') and not line.startswith('         ') and not line.startswith('=== '):
+                        line = line[1:]
                     elif "=== Track" in stripped_line and "downloaded ===" in stripped_line:
-                        # This should be at indent level 1 (8 spaces)
-                        if not line.startswith('        '):
-                            line = "        " + stripped_line
+                        line = stripped_line
+                elif self.media_type == DownloadTypeEnum.album:
+                    stripped_line = line.lstrip()
+                    if line.startswith('        ') and not line.startswith('         ') and not line.startswith('=== '):
+                        line = line[1:]
+                    elif "=== Track" in stripped_line and "downloaded ===" in stripped_line:
+                        line = stripped_line
+                elif self.media_type == DownloadTypeEnum.track:
+                    stripped_line = line.lstrip()
+                    if line.startswith('        ') and not line.startswith('         ') and not line.startswith('=== '):
+                        line = line[1:]
+                    elif "=== Track" in stripped_line and "downloaded ===" in stripped_line:
+                        line = stripped_line
 
                 self.queue.put(line + '\n')
             self.buffer = lines[-1]
@@ -1516,7 +1624,7 @@ class QueueWriter(io.TextIOBase):
 
 def run_download_in_thread(orpheus, url, output_path, gui_settings, search_result_data=None):
     """Runs the download using the provided global Orpheus instance."""
-    global output_queue, stop_event, app, download_process_active, DEFAULT_SETTINGS, _queue_log_handler_instance
+    global output_queue, stop_event, app, download_process_active, DEFAULT_SETTINGS, _queue_log_handler_instance, _current_download_context
     import time
     import threading
     
@@ -1663,20 +1771,24 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             downloader.service_name = module_name
             downloader.download_mode = media_type
             queue_writer.media_type = media_type
+            _current_download_context = media_type
             
             yield_to_gui()
             
             is_beatport_chart = False
             
             if media_type == DownloadTypeEnum.track:
+                downloader.set_indent_number(0)
+                
                 if stop_event.is_set(): is_cancelled = True
                 else:
                     yield_to_gui()
                     oprinter.oprint(f"Processing track: {media_id}")
                     downloader.download_track(track_id=str(media_id), album_location=output_path + '/')
-                    output_queue.put('\n')
                     yield_to_gui()
             elif media_type == DownloadTypeEnum.playlist:
+                downloader.set_indent_number(0)
+                
                 oprinter.oprint(f"Fetching playlist info: {media_id}")
                 data_dict = {}; raw_result = search_result_data.get('raw_result') if search_result_data else None
                 
@@ -1709,7 +1821,8 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                     for k, v in raw_tags.items():
                         if isinstance(v, (str, int, bool, float)): playlist_tags[k] = re.sub(r'[\\/:*?"<>|]', '_', str(v)).strip() if isinstance(v, str) else v
                     playlist_tags['explicit'] = ' [E]' if playlist_info.explicit else ''; playlist_path_format = downloader_settings['formatting']['playlist_format']
-                    output_queue.put(f" Starting playlist download: '{playlist_info.name}' ({num_tracks} tracks)\n")
+                    output_queue.put(f"Starting playlist download: '{playlist_info.name}' ({num_tracks} tracks)\n")
+                    output_queue.put("\n")
                     try: relative_playlist_path = playlist_path_format.format(**playlist_tags)
                     except KeyError as fmt_e: print(f"[Warning] Formatting KeyError for playlist path: {fmt_e}. Using default name."); relative_playlist_path = f"Playlist_{media_id}"
                     relative_playlist_path = re.sub(r'[\\/:*?"<>|]', '_', relative_playlist_path).strip(); full_playlist_path = os.path.join(output_path, relative_playlist_path) + '/'; os.makedirs(full_playlist_path, exist_ok=True)
@@ -1719,13 +1832,15 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                         
                         yield_to_gui()
                         
-                        oprinter.oprint(f"Processing playlist track {index}/{num_tracks}: {track_id}")
-                        percentage = (index / num_tracks) * 100; output_queue.put(f"Progress: Track {index}/{num_tracks} ({percentage:.0f}%)"); output_queue.put('\n')
+                        downloader.set_indent_number(0); oprinter.oprint(f"Processing playlist track {index}/{num_tracks}")
+                        percentage = (index / num_tracks) * 100; output_queue.put(f"Progress: Track {index}/{num_tracks} ({percentage:.0f}%)\n")
                         downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=full_playlist_path, track_index=index, number_of_tracks=num_tracks, extra_kwargs=playlist_info.track_extra_kwargs)
                         
                         yield_to_gui()
                 else: oprinter.oprint(f"Could not retrieve playlist info or playlist is empty.")
             elif media_type == DownloadTypeEnum.album:
+                downloader.set_indent_number(0)
+                
                 oprinter.oprint(f"Fetching album info: {media_id}")
                 data_dict = {}; raw_result = search_result_data.get('raw_result') if search_result_data else None
                 if downloader.service_name == 'soundcloud':
@@ -1748,7 +1863,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                      oprinter.oprint(f"[Error] Failed to get album info for {media_id}: {e}")
 
                 if album_info and album_info.tracks:
-                    num_tracks = len(album_info.tracks); output_queue.put(f" Starting album download: '{album_info.name}' ({num_tracks} tracks)\n")
+                    num_tracks = len(album_info.tracks); output_queue.put(f"Starting album download: '{album_info.name}' ({num_tracks} tracks)\n")
                     album_path = downloader._create_album_location(output_path, media_id, album_info); downloader.print(f'=== Downloading album {album_info.name} ({media_id}) ==='); downloader._download_album_files(album_path, album_info)
                     for index, track_id in enumerate(album_info.tracks, start=1):
                         if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before track {index}/{num_tracks}."); break
@@ -1756,15 +1871,18 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                         yield_to_gui()
                         
                         track_name = track_id.name if hasattr(track_id, 'name') else str(track_id)
-                        downloader.set_indent_number(2); oprinter.oprint(f"Processing album track {index}/{num_tracks}: {track_name}")
-                        percentage = (index / num_tracks) * 100; output_queue.put(f"                Progress: Track {index}/{num_tracks} ({percentage:.0f}%)\n")
-                        downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=album_path, track_index=index, number_of_tracks=num_tracks, extra_kwargs=album_info.track_extra_kwargs, indent_level=2)
+                        downloader.set_indent_number(0); oprinter.oprint(f"Processing album track {index}/{num_tracks}: {track_name}")
+                        percentage = (index / num_tracks) * 100; output_queue.put(f"Progress: Track {index}/{num_tracks} ({percentage:.0f}%)\n")
+                        downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=album_path, track_index=index, number_of_tracks=num_tracks, extra_kwargs=album_info.track_extra_kwargs, indent_level=1)
                         
                         yield_to_gui()
                     downloader.set_indent_number(1)
                 else: oprinter.oprint(f"Could not retrieve album info or album is empty.")
             elif media_type == DownloadTypeEnum.artist:
+                downloader.set_indent_number(0)
+                
                 oprinter.oprint(f"Fetching artist info: {media_id}")
+                oprinter.oprint("")
                 data_dict = {}; raw_result = search_result_data.get('raw_result') if search_result_data else None
                 if downloader.service_name == 'soundcloud':
                     try:
@@ -1773,7 +1891,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                         if resolved_data and resolved_data.get('id') == media_id: data_dict = {media_id: resolved_data}
                         else: oprinter.oprint(f"[Warning] Failed to resolve SoundCloud URL or ID mismatch for {media_id}. Proceeding without pre-fetched data."); data_dict = {}
                     except Exception as e: oprinter.oprint(f"[Error] Resolving SoundCloud URL failed: {e}"); data_dict = {}
-
+                
                 artist_info = None
                 try:
                     if downloader.service_name == 'soundcloud':
@@ -1787,7 +1905,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                     artist_name = artist_info.name; oprinter.oprint(f"=== Downloading artist {artist_name} ({media_id}) ===")
                     sanitized_artist_name = re.sub(r'[\\/:*?"<>|]', '_', artist_name).strip(); artist_path = os.path.join(output_path, sanitized_artist_name) + '/'; os.makedirs(artist_path, exist_ok=True)
                     num_albums = len(artist_info.albums); tracks_downloaded_in_albums = []
-                    output_queue.put(f" Starting artist download: '{artist_name}' ({num_albums} albums + {len(artist_info.tracks)} potential tracks)\n")
+                    output_queue.put(f"Starting artist download: '{artist_name}' ({num_albums} albums + {len(artist_info.tracks)} potential tracks)\n")
                     oprinter.oprint(f"Processing {num_albums} albums...")
 
                     for index, album_id in enumerate(artist_info.albums, start=1):
@@ -1796,7 +1914,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                         yield_to_gui()
                         
                         output_queue.put("\n")
-                        oprinter.oprint(f"Processing album {index}/{num_albums}: {album_id}")
+                        oprinter.oprint(f"Processing album {index}/{num_albums}")
                         data_dict_for_album = {}
                         album_info_for_artist = None
 
@@ -1825,12 +1943,11 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                                  
                                  yield_to_gui()
                                  
-                                 output_queue.put("\n")
                                  track_name_album = track_id.name if hasattr(track_id, 'name') else str(track_id)
-                                 downloader.set_indent_number(3); oprinter.oprint(f"Processing album track {track_index}/{num_album_tracks}: {track_name_album}")
-                                 track_percentage = (track_index / num_album_tracks) * 100; output_queue.put(f"  -> Album Track {track_index}/{num_album_tracks} ({track_percentage:.0f}%)"); output_queue.put('\n\n')
-                                 downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=album_path, track_index=track_index, number_of_tracks=num_album_tracks, main_artist=artist_name, extra_kwargs=album_info_for_artist.track_extra_kwargs, indent_level=3)
-                                 output_queue.put('\n'); tracks_downloaded_in_albums.append(str(track_id.id) if hasattr(track_id, 'id') else str(track_id))
+                                 oprinter.oprint(f"Processing album track {track_index}/{num_album_tracks}: {track_name_album}")
+                                 track_percentage = (track_index / num_album_tracks) * 100; output_queue.put(f"-> Album Track {track_index}/{num_album_tracks} ({track_percentage:.0f}%)\n")
+                                 downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=album_path, track_index=track_index, number_of_tracks=num_album_tracks, main_artist=artist_name, extra_kwargs=album_info_for_artist.track_extra_kwargs, indent_level=1)
+                                 tracks_downloaded_in_albums.append(str(track_id.id) if hasattr(track_id, 'id') else str(track_id))
                                  
                                  yield_to_gui()
                              if is_cancelled: break
@@ -1845,11 +1962,9 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                                 
                                 yield_to_gui()
                                 
-                                output_queue.put("\n")
-                                downloader.set_indent_number(2); oprinter.oprint(f"Processing standalone track {index}/{num_standalone}: {track_id_obj}")
-                                standalone_percentage = (index / num_standalone) * 100; output_queue.put(f"  -> Standalone Track {index}/{num_standalone} ({standalone_percentage:.0f}%)"); output_queue.put('\n\n')
-                                downloader.download_track(track_id=str(track_id_obj.id) if hasattr(track_id_obj, 'id') else str(track_id_obj), album_location=artist_path, main_artist=artist_name, number_of_tracks=1, indent_level=2, extra_kwargs=artist_info.track_extra_kwargs)
-                                output_queue.put('\n')
+                                downloader.set_indent_number(0); oprinter.oprint(f"Processing standalone track {index}/{num_standalone}: {track_id_obj}")
+                                standalone_percentage = (index / num_standalone) * 100; output_queue.put(f"-> Standalone Track {index}/{num_standalone} ({standalone_percentage:.0f}%)\n")
+                                downloader.download_track(track_id=str(track_id_obj.id) if hasattr(track_id_obj, 'id') else str(track_id_obj), album_location=artist_path, main_artist=artist_name, number_of_tracks=1, indent_level=1, extra_kwargs=artist_info.track_extra_kwargs)
                                 
                                 yield_to_gui()
                 else: oprinter.oprint(f"Could not retrieve artist info.")
@@ -1932,13 +2047,14 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             pass
         else:
             final_status_message = "Download Finished." 
-            print("\n" + final_status_message + "\n")
+            print(final_status_message)
         
         print(time_taken_message)
-        print("\n\n")
+        print("\n")
 
         sys.stdout = original_stdout
         sys.stderr = original_stderr
+        _current_download_context = None
 
         download_successful = not is_cancelled and not download_exception_occurred
 
@@ -2152,9 +2268,15 @@ def start_download_thread(search_result_data=None):
         current_batch_output_path = None
 
 def stop_download():
-    global stop_event, output_queue
+    global stop_event, output_queue, _current_download_context
     stop_event.set()
-    output_queue.put("Download stop requested...\n")
+    if _current_download_context == DownloadTypeEnum.artist:
+        indentation = "                        "
+    elif _current_download_context == DownloadTypeEnum.album:
+        indentation = "                "
+    else:
+        indentation = "        "
+    output_queue.put(f"{indentation}Download stop requested...\n")
 
 def on_platform_change(*args):
     global platform_var
