@@ -1188,7 +1188,7 @@ def log_to_textbox(msg, error=False):
             content_to_insert = f"{leading_whitespace}=== ✅ Track completed ===\n\n"
         elif "=== Track" in content_to_insert and "skipped ===" in content_to_insert and not content_to_insert.strip() == "=== Track skipped ===":
             leading_whitespace = content_to_insert[:len(content_to_insert) - len(content_to_insert.lstrip())]
-            content_to_insert = f"{leading_whitespace}=== ⚠ Track skipped ===\n\n"
+            content_to_insert = f"{leading_whitespace}=== ▶▶ Track skipped ===\n\n"
         elif "=== Track" in content_to_insert and "failed (" in content_to_insert and ") ===" in content_to_insert:
             leading_whitespace = content_to_insert[:len(content_to_insert) - len(content_to_insert.lstrip())]
             content_to_insert = f"{leading_whitespace}=== ❌ Track failed ===\n\n"
@@ -1229,10 +1229,10 @@ def log_to_textbox(msg, error=False):
                     log_textbox.insert("end", "❌", ("emoji_error",))
                     log_textbox.insert("end", parts[1])
                     return True
-                elif "=== ⚠ Track skipped ===" in text_content:
-                    parts = text_content.split("⚠")
+                elif "=== ▶▶ Track skipped ===" in text_content:
+                    parts = text_content.split("▶▶")
                     log_textbox.insert("end", parts[0])
-                    log_textbox.insert("end", "⚠", ("emoji_warning",))
+                    log_textbox.insert("end", "▶▶", ("emoji_warning",))
                     log_textbox.insert("end", parts[1])
                     return True
                 return False
