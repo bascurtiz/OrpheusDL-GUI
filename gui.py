@@ -1185,7 +1185,7 @@ def log_to_textbox(msg, error=False):
             content_to_insert = msg
         if "=== Track" in content_to_insert and "downloaded ===" in content_to_insert and not "completed" in content_to_insert:
             leading_whitespace = content_to_insert[:len(content_to_insert) - len(content_to_insert.lstrip())]
-            content_to_insert = f"{leading_whitespace}=== ✔ Track completed ===\n\n"
+            content_to_insert = f"{leading_whitespace}=== ✅ Track completed ===\n\n"
         elif "=== Track" in content_to_insert and "skipped ===" in content_to_insert and not content_to_insert.strip() == "=== Track skipped ===":
             leading_whitespace = content_to_insert[:len(content_to_insert) - len(content_to_insert.lstrip())]
             content_to_insert = f"{leading_whitespace}=== ▶ Track skipped ===\n\n"
@@ -1217,10 +1217,10 @@ def log_to_textbox(msg, error=False):
             except: pass
             def insert_track_status_with_colored_emoji(text_content):
                 """Insert track status message with colored emoji and default text"""
-                if "=== ✔ Track completed ===" in text_content:
-                    parts = text_content.split("✔")
+                if "=== ✅ Track completed ===" in text_content:
+                    parts = text_content.split("✅")
                     log_textbox.insert("end", parts[0])
-                    log_textbox.insert("end", "✔", ("emoji_success",))
+                    log_textbox.insert("end", "✅", ("emoji_success",))
                     log_textbox.insert("end", parts[1])
                     return True
                 elif "=== ❌ Track failed ===" in text_content:
