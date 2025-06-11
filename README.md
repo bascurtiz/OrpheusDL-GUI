@@ -24,7 +24,7 @@ https://youtu.be/AGsYTQuO7nk
 7. Install the required dependencies: `pip3 install -r requirements-gui.txt`
 8. Run the GUI: `python3 gui.py`<br>
 <br>
-[![](https://i.imgur.com/WP7yUMr.gif)
+<img src="https://i.imgur.com/WP7yUMr.gif" alt="GUI overview">
 <br>
 
 ## Compatibility
