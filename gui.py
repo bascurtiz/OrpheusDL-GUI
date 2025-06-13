@@ -2319,7 +2319,7 @@ def clear_search_results_data():
         if 'selection_var' in globals() and selection_var:
             if selection_var.get() != "": selection_var.set("")
         if 'search_download_button' in globals() and search_download_button and search_download_button.winfo_exists():
-            search_download_button.configure(state="disabled")
+            search_download_button.configure(state="disabled", text="Download")
      except NameError: pass
      except tkinter.TclError as e: print(f"TclError clearing search results data (widget destroyed?): {e}")
      except Exception as e: print(f"Error clearing search results data: {e}")
@@ -2538,18 +2538,33 @@ def on_tree_select(event):
 
         selection = tree.selection()
         if selection:
-            selected_iid = selection[0]
-            selected_item_data = next((item for item in search_results_data if str(item.get('tree_iid')) == str(selected_iid)), None)
-            if selected_item_data: 
-                selection_var.set(selected_item_data['number'])
-                search_download_button.configure(state="normal")
-            else: 
-                print(f"Selected iid {selected_iid} not found in search_results_data.")
-                selection_var.set("")
-                search_download_button.configure(state="disabled")
+            selected_count = len(selection)
+            if selected_count == 1:
+                selected_iid = selection[0]
+                selected_item_data = next((item for item in search_results_data if str(item.get('tree_iid')) == str(selected_iid)), None)
+                if selected_item_data: 
+                    selection_var.set(selected_item_data['number'])
+                    search_download_button.configure(state="normal", text="Download")
+                else: 
+                    print(f"Selected iid {selected_iid} not found in search_results_data.")
+                    selection_var.set("")
+                    search_download_button.configure(state="disabled", text="Download")
+            else:
+                selected_numbers = []
+                for selected_iid in selection:
+                    selected_item_data = next((item for item in search_results_data if str(item.get('tree_iid')) == str(selected_iid)), None)
+                    if selected_item_data:
+                        selected_numbers.append(selected_item_data['number'])
+                try:
+                    selected_numbers.sort(key=int)
+                except ValueError:
+                    pass
+                
+                selection_var.set(",".join(selected_numbers))
+                search_download_button.configure(state="normal", text=f"Download {selected_count} IDs")
         else: 
             selection_var.set("")
-            search_download_button.configure(state="disabled")
+            search_download_button.configure(state="disabled", text="Download")
     except NameError: pass
     except tkinter.TclError as e: print(f"TclError in tree select (widget destroyed?): {e}")
     except Exception as e: print(f"Error in tree select: {e}")
@@ -2560,20 +2575,25 @@ def on_selection_change(*args):
         if 'selection_var' not in globals() or not selection_var: return
         if 'search_download_button' not in globals() or not search_download_button or not search_download_button.winfo_exists(): return
 
-        selection_num_str = selection_var.get().strip()
-        if not selection_num_str: search_download_button.configure(state="disabled"); return
-        selection_num = int(selection_num_str)
-        matching_item = next((item for item in search_results_data if item.get('number') == str(selection_num)), None)
-        search_download_button.configure(state="normal" if matching_item else "disabled")
+        selection_str = selection_var.get().strip()
+        if not selection_str: 
+            search_download_button.configure(state="disabled", text="Download")
+            return
+        if "," in selection_str:
+            return
+        try:
+            selection_num = int(selection_str)
+            matching_item = next((item for item in search_results_data if item.get('number') == str(selection_num)), None)
+            search_download_button.configure(state="normal" if matching_item else "disabled", text="Download")
+        except ValueError:
+            search_download_button.configure(state="disabled", text="Download")
+            
     except NameError: pass
-    except ValueError:
-        if 'search_download_button' in globals() and search_download_button and search_download_button.winfo_exists():
-            search_download_button.configure(state="disabled")
     except tkinter.TclError as e: print(f"TclError in selection change (widget destroyed?): {e}")
     except Exception as e:
         print(f"Error in selection change validation: {e}")
         if 'search_download_button' in globals() and search_download_button and search_download_button.winfo_exists():
-            search_download_button.configure(state="disabled")
+            search_download_button.configure(state="disabled", text="Download")
 
 def get_selected_item_data():
     global selection_var, search_results_data
@@ -2586,6 +2606,30 @@ def get_selected_item_data():
         return next((item for item in search_results_data if item.get('number') == str(selection_num)), None)
     except NameError: return None
     except (ValueError, Exception): return None
+
+def get_selected_items_data():
+    """Get data for all currently selected items in the tree."""
+    global tree, search_results_data
+    try:
+        if 'tree' not in globals() or not tree or not tree.winfo_exists(): return []
+        if 'search_results_data' not in globals() or not search_results_data: return []
+
+        selection = tree.selection()
+        if not selection: return []
+        
+        selected_items = []
+        for selected_iid in selection:
+            selected_item_data = next((item for item in search_results_data if str(item.get('tree_iid')) == str(selected_iid)), None)
+            if selected_item_data:
+                selected_items.append(selected_item_data)
+            else:
+                print(f"Selected iid {selected_iid} not found in search_results_data.")
+        
+        return selected_items
+    except NameError: return []
+    except Exception as e: 
+        print(f"Error getting selected items data: {e}")
+        return []
 
 def build_url_from_result(result_data):
     platform = result_data.get('platform'); search_type = result_data.get('type'); item_id = result_data.get('id'); raw_result_obj = result_data.get('raw_result')
@@ -2723,20 +2767,83 @@ def build_url_from_result(result_data):
         else: print(f"[URL Build - {platform}] Not supported for type '{t_lower}'."); return None
 
 def download_selected():
-    global tabview, url_entry
+    global tabview, url_entry, file_download_queue, current_batch_output_path
     try:
-        selected_data = get_selected_item_data()
-        if not selected_data: show_centered_messagebox("Error", "Invalid selection.", dialog_type="warning"); return
-        url_to_download = build_url_from_result(selected_data)
-        if url_to_download:
-            print(f"Switching tab and starting download for: {url_to_download}")
+        selected_items = get_selected_items_data()
+        if not selected_items: 
+            show_centered_messagebox("Error", "No items selected.", dialog_type="warning")
+            return
+        
+        if len(selected_items) == 1:
+            selected_data = selected_items[0]
+            url_to_download = build_url_from_result(selected_data)
+            if url_to_download:
+                print(f"Switching tab and starting download for: {url_to_download}")
+                if 'tabview' in globals() and tabview and tabview.winfo_exists():
+                    tabview.set("Download")
+                if 'url_entry' in globals() and url_entry and url_entry.winfo_exists():
+                    url_entry.delete(0, "end"); url_entry.insert(0, url_to_download)
+                else: print("Warning: url_entry not found.")
+                start_download_thread(search_result_data=selected_data)
+            else: 
+                show_centered_messagebox("Error", f"Could not determine URL for selected item.", dialog_type="error")
+        else:
+            print(f"Starting batch download for {len(selected_items)} items")
+            urls_to_download = []
+            failed_items = []
+            
+            for item_data in selected_items:
+                url = build_url_from_result(item_data)
+                if url:
+                    urls_to_download.append(url)
+                else:
+                    failed_items.append(f"{item_data.get('title', 'Unknown')} by {item_data.get('artist', 'Unknown')}")
+            
+            if failed_items:
+                failed_list = '\n'.join(failed_items[:5])
+                if len(failed_items) > 5:
+                    failed_list += f'\n... and {len(failed_items) - 5} more'
+                show_centered_messagebox("Warning", 
+                    f"Could not build URLs for {len(failed_items)} item(s):\n{failed_list}\n\nProceeding with {len(urls_to_download)} valid items.", 
+                    dialog_type="warning")
+            
+            if not urls_to_download:
+                show_centered_messagebox("Error", "Could not build URLs for any selected items.", dialog_type="error")
+                return
             if 'tabview' in globals() and tabview and tabview.winfo_exists():
                 tabview.set("Download")
-            if 'url_entry' in globals() and url_entry and url_entry.winfo_exists():
-                url_entry.delete(0, "end"); url_entry.insert(0, url_to_download)
-            else: print("Warning: url_entry not found.")
-            start_download_thread(search_result_data=selected_data)
-        else: show_centered_messagebox("Error", f"Could not determine URL for selected item.", dialog_type="error")
+            global current_batch_output_path
+            if 'path_var_main' in globals() and path_var_main:
+                output_path = path_var_main.get().strip()
+                if output_path:
+                    try:
+                        norm_path = os.path.normpath(output_path)
+                        current_batch_output_path = os.path.join(norm_path, '')
+                        if not os.path.exists(norm_path):
+                            os.makedirs(norm_path, exist_ok=True)
+                        print(f"Set batch output path to: {current_batch_output_path}")
+                    except Exception as e:
+                        print(f"Error setting up batch output path: {e}")
+                        current_batch_output_path = None
+                else:
+                    current_batch_output_path = None
+            else:
+                current_batch_output_path = None
+            file_download_queue.clear()
+            file_download_queue.extend(urls_to_download)
+            if file_download_queue:
+                first_url = file_download_queue.pop(0)
+                print(f"Starting batch download with first URL: {first_url}")
+                print(f"Remaining in queue: {len(file_download_queue)} items")
+                if 'url_entry' in globals() and url_entry and url_entry.winfo_exists():
+                    url_entry.delete(0, "end")
+                    url_entry.insert(0, first_url)
+                else: 
+                    print("Warning: url_entry not found.")
+                _start_single_download(first_url, current_batch_output_path, selected_items[0])
+            else:
+                print("Error: Queue was empty after setup")
+            
     except NameError as e: print(f"Error in download_selected (widget not ready?): {e}")
     except tkinter.TclError as e: print(f"TclError in download_selected (widget destroyed?): {e}")
     except Exception as e: print(f"Unexpected error in download_selected: {e}")
@@ -3620,7 +3727,7 @@ if __name__ == "__main__":
         style.layout("Custom.Treeview", [('Treeview.treearea', {'sticky': 'nswe'})])
         style.map("Custom.Treeview", background=[('selected', tree_selected_bg)], foreground=[('selected', tree_selected_fg)])
         style.map("Custom.Treeview.Heading", background=[('active', "#1F6AA5"), ('!active', tree_header_bg)], foreground=[('active', tree_selected_fg), ('!active', tree_header_fg)])
-        columns = ("#", "Title", "Artist", "Duration", "Year", "Additional", "Explicit", "ID"); tree = ttk.Treeview(treeview_container, columns=columns, show="headings", selectmode="browse", style="Custom.Treeview"); tree.grid(row=0, column=0, sticky="nsew", padx=(5,0), pady=3)
+        columns = ("#", "Title", "Artist", "Duration", "Year", "Additional", "Explicit", "ID"); tree = ttk.Treeview(treeview_container, columns=columns, show="headings", selectmode="extended", style="Custom.Treeview"); tree.grid(row=0, column=0, sticky="nsew", padx=(5,0), pady=3)
         col_configs = {"#": {"text": "#", "width": 40, "anchor": "w"}, "Title": {"text": "Title", "width": 300, "anchor": "w"}, "Artist": {"text": "Artist", "width": 200, "anchor": "w"}, "Duration": {"text": "Duration", "width": 80, "anchor": "center"}, "Year": {"text": "Year", "width": 60, "anchor": "center"}, "Additional": {"text": "Additional", "width": 120, "anchor": "w"}, "Explicit": {"text": "E", "width": 30, "anchor": "center"}, "ID": {"text": "ID", "width": 0, "anchor": "w"}}
         for col in columns: cfg = col_configs[col]; tree.heading(col, text=cfg["text"], anchor=cfg["anchor"], command=lambda c=col: sort_results(c)); tree.column(col, width=cfg["width"], anchor=cfg["anchor"], stretch=False)
         tree.column("Title", stretch=True); tree.column("Artist", stretch=True)
