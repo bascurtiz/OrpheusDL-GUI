@@ -3733,6 +3733,37 @@ if __name__ == "__main__":
         tree.column("Title", stretch=True); tree.column("Artist", stretch=True)
         scrollbar = customtkinter.CTkScrollbar(treeview_container, command=tree.yview); tree.configure(yscrollcommand=scrollbar.set)
         tree.bind("<<TreeviewSelect>>", on_tree_select); tree.bind("<Configure>", lambda event: _check_and_toggle_scrollbar(tree, scrollbar) if 'tree' in globals() and tree and tree.winfo_exists() and 'scrollbar' in globals() and scrollbar and scrollbar.winfo_exists() else None)
+        if platform.system() == "Darwin":
+            def handle_macos_click(event):
+                """Handle macOS-specific multi-selection with Command/Shift keys."""
+                item = tree.identify_row(event.y)
+                if not item:
+                    return
+                if event.state & 0x8:
+                    if item in tree.selection():
+                        tree.selection_remove(item)
+                    else:
+                        tree.selection_add(item)
+                    return "break"
+                elif event.state & 0x1:
+                    current_selection = tree.selection()
+                    if current_selection:
+                        all_items = tree.get_children()
+                        try:
+                            last_selected = current_selection[-1]
+                            start_idx = all_items.index(last_selected)
+                            end_idx = all_items.index(item)
+                            if start_idx > end_idx:
+                                start_idx, end_idx = end_idx, start_idx
+                            tree.selection_set(all_items[start_idx:end_idx + 1])
+                        except (ValueError, IndexError):
+                            tree.selection_set(item)
+                    else:
+                        tree.selection_set(item)
+                    return "break"
+                tree.selection_set(item)
+                return "break"
+            tree.bind("<Button-1>", handle_macos_click)
         selection_label_var = tkinter.StringVar(value="Selection: None")
         selection_frame = customtkinter.CTkFrame(search_main_frame, fg_color="transparent"); selection_frame.pack(fill="x", pady=(12, 10), side="bottom")
         search_progress_bar = customtkinter.CTkProgressBar(selection_frame); search_progress_bar.pack(side="left", fill="x", expand=True, padx=(6, 5)); search_progress_bar.set(0)
