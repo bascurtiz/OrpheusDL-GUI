@@ -10,6 +10,19 @@ if getattr(sys, 'frozen', False):
     if os.path.isdir(gamdl_parent_path):
         sys.path.insert(0, gamdl_parent_path)
 os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
+try:
+    import sentry_sdk
+    sentry_sdk.init(
+        dsn="https://0219493f093f41e8338bced7ea8a5135@o4509519200321536.ingest.de.sentry.io/4509519204057168",
+        traces_sample_rate=0.1,
+        send_default_pii=False,
+        environment=os.getenv("SENTRY_ENVIRONMENT", "production"),
+        attach_stacktrace=True,
+        release=os.getenv("ORPHEUS_VERSION", "unknown"),
+    )
+    sentry_sdk.set_tag("component", "gui")
+except ImportError:
+    pass
 import copy
 import customtkinter
 import datetime
@@ -68,7 +81,7 @@ SERVICE_COLORS = {
 }
 
 SERVICE_DISPLAY_NAMES = {
-    "tidal": "Tidal",
+    "tidal": "TIDAL",
     "jiosaavn": "JioSaavn",
     "apple music": "Apple Music",
     "beatport": "Beatport",
@@ -123,8 +136,7 @@ class QueueLogHandler(logging.Handler):
             log_entry = f"[{record.levelname}] {self.format(record)}\n"
             self.log_queue.put(log_entry)
             return
-        if record.levelno < logging.WARNING:
-            return
+        return
 
         msg_content = record.getMessage()
         hls_ffmpeg_warning_pattern = r"soundcloud --> HLS_UNEXPECTED_ERROR_IN_TRY_BLOCK: \[(WinError 2|Errno 2)\] (The system cannot find the file specified|No such file or directory)"
@@ -213,10 +225,12 @@ def setup_logging(log_queue):
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(message)s', datefmt='%H:%M:%S')
     _queue_log_handler_instance.setFormatter(formatter)
     root_logger.addHandler(_queue_log_handler_instance)
-    root_logger.setLevel(logging.INFO) 
     if current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False):
-        logging.info("Logging configured to use GUI queue.")
-__version__ = "1.0.5"
+        root_logger.setLevel(logging.INFO)
+        logging.info("Logging configured to use GUI queue (debug mode enabled).")
+    else:
+        root_logger.setLevel(logging.CRITICAL)
+__version__ = "1.0.6"
 from update_checker import run_check_in_thread
 if platform.system() == "Windows":
     try:
@@ -375,7 +389,7 @@ if platform.system() == "Windows":
                     kwargs['startupinfo'] = startupinfo
                     
             except Exception as e:
-                print(f"[Patch Warning] Could not set subprocess flags to hide console: {e}", file=sys.stderr__)
+                print(f"[Patch Warning] Could not set subprocess flags to hide console: {e}", file=sys.__stderr__)
             
             super().__init__(*args, **kwargs)
     
@@ -491,7 +505,8 @@ def load_settings():
 
     settings = {
         "globals": copy.deepcopy(DEFAULT_SETTINGS["globals"]),
-        "credentials": {}
+        "credentials": {},
+        "modules": {}
     }
 
     if not os.path.exists(CONFIG_FILE_PATH):
@@ -514,11 +529,24 @@ def load_settings():
                 if "download_path" in orpheus_general: settings["globals"]["general"]["output_path"] = orpheus_general["download_path"]
                 if "download_quality" in orpheus_general: settings["globals"]["general"]["quality"] = orpheus_general["download_quality"]
                 if "search_limit" in orpheus_general: settings["globals"]["general"]["search_limit"] = orpheus_general["search_limit"]
+                if "concurrent_downloads" in orpheus_general: settings["globals"]["general"]["concurrent_downloads"] = orpheus_general["concurrent_downloads"]
+                if "play_sound_on_finish" in orpheus_general: settings["globals"]["general"]["play_sound_on_finish"] = orpheus_general["play_sound_on_finish"]
             for section_key, section_data in orpheus_global_from_file.items():
                  if section_key != "general" and section_key in settings["globals"]:
                      if isinstance(section_data, dict) and isinstance(settings["globals"].get(section_key), dict):
-                         deep_merge(settings["globals"][section_key], section_data)
+                         if section_key == "advanced" and "codec_conversions" in section_data:
+                             for key, value in section_data.items():
+                                 if key == "codec_conversions":
+                                     settings["globals"][section_key][key] = copy.deepcopy(value)
+                                 else:
+                                     if key in settings["globals"][section_key] and isinstance(settings["globals"][section_key][key], dict) and isinstance(value, dict):
+                                         deep_merge(settings["globals"][section_key][key], value)
+                                     else:
+                                         settings["globals"][section_key][key] = copy.deepcopy(value)
+                         else:
+                             deep_merge(settings["globals"][section_key], section_data)
         if "modules" in file_settings:
+            settings["modules"] = copy.deepcopy(file_settings["modules"])
             platform_map_from_orpheus = { "bugs": "BugsMusic", "nugs": "Nugs", "soundcloud": "SoundCloud", "tidal": "Tidal", "qobuz": "Qobuz", "deezer": "Deezer", "idagio": "Idagio", "kkbox": "KKBOX", "napster": "Napster", "beatport": "Beatport", "beatsource": "Beatsource", "musixmatch": "Musixmatch", "spotify": "Spotify", "applemusic": "AppleMusic" }
             for orpheus_platform, creds_from_file in file_settings["modules"].items():
                 gui_platform = platform_map_from_orpheus.get(orpheus_platform)
@@ -534,7 +562,8 @@ def load_settings():
         print("Using default settings ONLY for globals. Credentials will be empty.")
         settings = {
             "globals": copy.deepcopy(DEFAULT_SETTINGS["globals"]),
-            "credentials": {}
+            "credentials": {},
+            "modules": {}
         }
 
     current_settings = settings
@@ -775,13 +804,16 @@ def save_settings(show_confirmation: bool = True):
          for field_key, var in fields.items():
               if not isinstance(var, tkinter.Variable): continue
               updated_gui_settings["credentials"][platform_name][field_key] = str(var.get())
+    if not validate_codec_conversions():
+        return False
+
     if parse_errors:
          error_list = "\\n - ".join(parse_errors)
          show_centered_messagebox("Settings Error", f"Could not save due to invalid values:\\n - {error_list}", dialog_type="error")
          return False
     mapped_orpheus_updates = { "global": {"general": {},"formatting": {},"codecs": {},"covers": {},"playlist": {},"advanced": {},"module_defaults": {},"artist_downloading": {},"lyrics": {}}, "modules": {} }
     gui_globals = updated_gui_settings.get("globals", {})
-    general_map_gui_to_orpheus = { "output_path": "download_path", "quality": "download_quality", "search_limit": "search_limit" }
+    general_map_gui_to_orpheus = { "output_path": "download_path", "quality": "download_quality", "search_limit": "search_limit", "concurrent_downloads": "concurrent_downloads", "play_sound_on_finish": "play_sound_on_finish", "min_file_size_kb": "min_file_size_kb" }
     if "general" in gui_globals:
         gui_general_section = gui_globals["general"]
         if "general" not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"]["general"] = {}
@@ -867,7 +899,7 @@ def save_settings(show_confirmation: bool = True):
 
 def handle_save_settings():
     """Handles the save settings button click."""
-    global save_status_var, app
+    global save_status_var, save_status_label, app
 
     try:
         save_attempt_successful = save_settings(show_confirmation=True)
@@ -877,17 +909,23 @@ def handle_save_settings():
         if save_attempt_successful:
             if 'save_status_var' in globals() and save_status_var:
                 save_status_var.set("Settings saved.")
+                if 'save_status_label' in globals() and save_status_label:
+                    save_status_label.configure(text_color=("#00C851", "#00C851"))
             
             if 'update_search_platform_dropdown' in globals() and callable(update_search_platform_dropdown):
                 app.after(100, update_search_platform_dropdown)
         else:
             if 'save_status_var' in globals() and save_status_var:
                 save_status_var.set("Failed to save settings.")
+                if 'save_status_label' in globals() and save_status_label:
+                    save_status_label.configure(text_color=("#FF6B6B", "#FF6B6B"))
 
     except Exception as e:
         err_msg = f"Unexpected error during save handling:\\n{type(e).__name__}: {e}"
         if 'save_status_var' in globals() and save_status_var:
             save_status_var.set(f"Error handling save: {type(e).__name__}")
+            if 'save_status_label' in globals() and save_status_label:
+                save_status_label.configure(text_color=("#FF6B6B", "#FF6B6B"))
         show_centered_messagebox("Save Error", err_msg, dialog_type="error")
         import traceback
         traceback.print_exc(file=sys.__stderr__)
@@ -1165,165 +1203,329 @@ def paste_text():
         except tkinter.TclError: pass
         tk_widget.insert(tkinter.INSERT, clipboard_text)
     except tkinter.TclError as e:
-         if "CLIPBOARD selection doesn't exist" not in str(e): print(f"TclError during paste: {e}")
+        if "CLIPBOARD selection doesn't exist" not in str(e): print(f"TclError during paste: {e}")
     except Exception as e: print(f"Error pasting text: {e}", exc_info=True)
     finally: hide_context_menu()
 
-def log_to_textbox(msg, error=False):
-    global _last_message_was_empty, log_textbox, log_scrollbar, app
+def _clean_ansi_and_process_markers(text):
+    """Clean ANSI color codes and process custom markers for GUI display"""
+    import re
+    platform_patterns = {
+        r'Platform: \033\[96m(TIDAL)\033\[0m': 'tidal',
+        r'Platform: \x1b\[96m(JioSaavn)\033\[0m': 'jiosaavn',
+        r'Platform: \033\[96m(JioSaavn)\033\[0m': 'jiosaavn',
+        r'Platform: \x1b\[96m(Jiosaavn)\033\[0m': 'jiosaavn',
+        r'Platform: \033\[96m(Jiosaavn)\033\[0m': 'jiosaavn',
+        r'Platform: \033\[91m(Apple Music)\033\[0m': 'apple music',
+        r'Platform: \033\[92m(Beatport)\033\[0m': 'beatport',
+        r'Platform: \033\[94m(Beatsource)\033\[0m': 'beatsource',
+        r'Platform: \033\[94m(Napster)\033\[0m': 'napster',
+        r'Platform: \033\[38;5;129m(Deezer)\033\[0m': 'deezer',
+        r'Platform: \033\[34m(Qobuz)\033\[0m': 'qobuz',
+        r'Platform: \033\[38;5;208m(SoundCloud)\033\[0m': 'soundcloud',
+        r'Platform: \033\[32m(Spotify)\033\[0m': 'spotify',
+        r'Platform: \033\[36m(KKBOX)\033\[0m': 'kkbox',
+        r'Platform: \033\[35m(Idagio)\033\[0m': 'idagio',
+        r'Platform: \033\[31m(Bugs)\033\[0m': 'bugs',
+        r'Platform: \033\[31m(Nugs)\033\[0m': 'nugs',
+    }
+    for platform_pattern, platform_name in platform_patterns.items():
+        display_name = SERVICE_DISPLAY_NAMES.get(platform_name, platform_name)
+        text = re.sub(platform_pattern, rf'Platform: |PLATFORM_{platform_name.upper().replace(" ", "_")}|{display_name}|RESET|', text)
+    gray_pattern = r'\033\[90m(.*?)\033\[0m'
+    text = re.sub(gray_pattern, r'|GRAY|\1|RESET|', text)
+    text = re.sub(r'(\d+/\d+\s+)(?:\033\[[0-9;]*m)?\+(?:\033\[[0-9;]*m)?(\s+)', r'\1✓\2', text)
+    text = re.sub(r'(\d+/\d+\s+)(?:\033\[[0-9;]*m)?>(?:\033\[[0-9;]*m)?(\s+)', r'\1▶\2', text)
+    text = re.sub(r'(\d+/\d+\s+)(\033\[91m)[xX](\033\[0m)(\s+)', r'\1\2❌\3\4', text)
+    text = re.sub(r'(\d+/\d+\s+)(?:\033\[[0-9;]*m)?[xX](?:\033\[[0-9;]*m)?(\s+)', r'\1❌\2', text)
+    text = re.sub(r'(\033\[91m)X(\033\[0m)', r'\1❌\2', text)
+    yellow_pattern = r'\033\[33m(.*?)\033\[0m'
+    def yellow_replacer(match):
+        content = match.group(1)
+        if "Track skipped" in content or "▶" in content or content.strip() == ">":
+            return content
+        return f'|YELLOW|{content}|RESET|'
+    
+    text = re.sub(yellow_pattern, yellow_replacer, text)
+    red_pattern = r'\033\[91m(.*?)\033\[0m'
+    text = re.sub(red_pattern, r'|RED|\1|RESET|', text)
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    text = ansi_escape.sub('', text)
+    text = text.replace('|RESET|', '')
+    
+    return text
+
+def _insert_text_with_links_and_platforms(text_content, error):
+    """Helper function to insert text with URL and platform styling"""
     try:
-        if 'log_textbox' not in globals() or not log_textbox or not log_textbox.winfo_exists(): return
-        if "Librespot:Session - Failed reading packet! Failed to receive packet" in msg:
-            return
-        if "Librespot authentication failed during session creation: BadCredentials" in msg:
-            return
-        if "Failed to create Librespot session from existing OAuth credentials. Forcing new OAuth flow." in msg:
-            return
-        if "If the browser does not open, please copy the URL above and paste it manually." in msg:
-            content_to_insert = f"\n{msg}\n"
-        else:
-            content_to_insert = msg
-        if "=== Track" in content_to_insert and "downloaded ===" in content_to_insert and not "completed" in content_to_insert:
-            leading_whitespace = content_to_insert[:len(content_to_insert) - len(content_to_insert.lstrip())]
-            content_to_insert = f"{leading_whitespace}=== ✅ Track completed ===\n\n"
-        elif "=== Track" in content_to_insert and "skipped ===" in content_to_insert and not content_to_insert.strip() == "=== Track skipped ===":
-            leading_whitespace = content_to_insert[:len(content_to_insert) - len(content_to_insert.lstrip())]
-            content_to_insert = f"{leading_whitespace}=== ▶ Track skipped ===\n\n"
-        elif "=== Track" in content_to_insert and "failed (" in content_to_insert and ") ===" in content_to_insert:
-            leading_whitespace = content_to_insert[:len(content_to_insert) - len(content_to_insert.lstrip())]
-            content_to_insert = f"{leading_whitespace}=== ❌ Track failed ===\n\n"
+        url_regex = r'https?://\S+|www\.\S+'
+        service_names = '|'.join(re.escape(s) for s in SERVICE_COLORS.keys())
+        service_regex = f'Platform: ({service_names})'
+        url_matches = list(re.finditer(url_regex, text_content, re.IGNORECASE))
+        platform_matches = list(re.finditer(service_regex, text_content, re.IGNORECASE))
+        all_matches = []
+        for match in url_matches:
+            all_matches.append((match.start(), match.end(), 'url', match.group()))
+        for match in platform_matches:
+            all_matches.append((match.start(), match.end(), 'platform', match.group()))
+        all_matches.sort(key=lambda x: x[0])
         
+        if all_matches:
+            last_end = 0
+            for start, end, match_type, matched_text in all_matches:
+                if start > last_end:
+                    text_before = text_content[last_end:start]
+                    tag = "error" if error else "normal"
+                    log_textbox.insert("end", text_before, (tag,))
+                if match_type == 'url':
+                    log_textbox.insert("end", matched_text, ("hyperlink",))
+                elif match_type == 'platform':
+                    prefix = "Platform: "
+                    service_name = matched_text.replace(prefix, "")
+                    service_tag = f"service_{service_name.replace(' ', '_')}"
+                    log_textbox.insert("end", prefix)
+                    log_textbox.insert("end", service_name, (service_tag,))
+                
+                last_end = end
+            if last_end < len(text_content):
+                remaining_text = text_content[last_end:]
+                tag = "error" if error else "normal"
+                log_textbox.insert("end", remaining_text, (tag,))
+        else:
+            tag = "error" if error else "normal"
+            log_textbox.insert("end", text_content, (tag,))
+    except Exception as e:
+        tag = "error" if error else "normal"
+        log_textbox.insert("end", text_content, (tag,))
+
+def log_to_textbox(msg, error=False):
+    """
+    Simplified log function that relies on clean CLI output.
+    Only handles basic styling: colors, emojis, hyperlinks, and platform coloring.
+    """
+    global _last_message_was_empty, log_textbox, log_scrollbar, app
+    
+    try:
+        if 'log_textbox' not in globals() or not log_textbox or not log_textbox.winfo_exists(): 
+            return
+        if any(filter_text in msg for filter_text in [
+            "Librespot:Session - Failed reading packet!",
+            "Librespot authentication failed during session creation: BadCredentials",
+            "Failed to create Librespot session from existing OAuth credentials",
+            "Attempting token refresh...",
+            "Token refresh failed",
+            "Attempting login via",
+            "Login successful, obtained session ID",
+            "Attempting authorization via",
+            "Authorization successful, obtained code",
+            "Exchanging code for token via",
+            "Token exchange successful",
+            "Initializing async downloads...",
+            "Set Windows ProactorEventLoopPolicy",
+            "Starting async event loop...",
+            "Creating aiohttp session...",
+            "aiohttp session created successfully"
+        ]) or any(pattern in msg for pattern in [
+            "Download speed: ",
+            "Download time: "
+        ]) or (
+            "concurrent downloads for" in msg and 
+            (" album tracks" in msg or " artist tracks" in msg)
+        ):
+            return
+        global _last_concurrent_download_message
+        if ("=== Downloading" in msg and any(media_type in msg for media_type in ["album", "playlist", "artist", "track"])):
+            _last_concurrent_download_message = None
+        if "Using" in msg and "concurrent downloads for" in msg and "tracks" in msg:
+            core_message = msg.strip()
+            if core_message == _last_concurrent_download_message:
+                return
+            _last_concurrent_download_message = core_message
+        content_to_insert = _clean_ansi_and_process_markers(msg)
         is_current_empty = not content_to_insert.strip()
-        if is_current_empty and _last_message_was_empty: return
+        if is_current_empty and _last_message_was_empty: 
+            return
         _last_message_was_empty = is_current_empty
-        if content_to_insert:
-            log_textbox.configure(state="normal")
+        
+        if not content_to_insert:
+            return
             
-            try:
-                log_textbox.tag_configure("error", foreground="#FF4444")
-                log_textbox.tag_configure("detail_text", foreground="#A0A0A0")
-                log_textbox.tag_configure("skipped_track", foreground="#FFBF00")
-                log_textbox.tag_configure("downloaded_track", foreground="#00C851")
-                log_textbox.tag_configure("normal", foreground="")
-                log_textbox.tag_configure("hyperlink", foreground="royal blue", underline=True)
-                log_textbox.tag_configure("emoji_success", foreground="#00C851")
-                log_textbox.tag_configure("emoji_error", foreground="#FF4444")
-                log_textbox.tag_configure("emoji_warning", foreground="#FFBF00")
-                log_textbox.tag_bind("hyperlink", "<Enter>", lambda e: log_textbox.config(cursor="hand2"))
-                log_textbox.tag_bind("hyperlink", "<Leave>", lambda e: log_textbox.config(cursor=""))
-                log_textbox.tag_bind("hyperlink", "<Button-1>", _on_hyperlink_click)
-                for service, color in SERVICE_COLORS.items():
-                    log_textbox.tag_configure(f"service_{service.replace(' ', '_')}", foreground=color)
-            except: pass
-            def insert_track_status_with_colored_emoji(text_content):
-                """Insert track status message with colored emoji and default text"""
-                if "=== ✅ Track completed ===" in text_content:
-                    parts = text_content.split("✅")
-                    log_textbox.insert("end", parts[0])
-                    log_textbox.insert("end", "✅", ("emoji_success",))
-                    log_textbox.insert("end", parts[1])
-                    return True
-                elif "=== ❌ Track failed ===" in text_content:
-                    parts = text_content.split("❌")
-                    log_textbox.insert("end", parts[0])
-                    log_textbox.insert("end", "❌", ("emoji_error",))
-                    log_textbox.insert("end", parts[1])
-                    return True
-                elif "=== ▶ Track skipped ===" in text_content:
-                    parts = text_content.split("▶")
-                    log_textbox.insert("end", parts[0])
-                    log_textbox.insert("end", "▶", ("emoji_warning",))
-                    log_textbox.insert("end", parts[1])
-                    return True
-                return False
-
-            url_regex = r'(https?://[^\s<>"]+|www\\.[^\s<>"]+)'
-            service_regex = r'Platform: (' + '|'.join(re.escape(s) for s in SERVICE_COLORS.keys()) + ')'
-            
-            combined_regex = f'({url_regex})|({service_regex})'
-            matches = list(re.finditer(combined_regex, content_to_insert, re.IGNORECASE))
-
-            if matches:
-                last_end = 0
-                for match in matches:
-                    start, end = match.span()
-                    if start > last_end:
-                        non_match_segment = content_to_insert[last_end:start]
-                        if not insert_track_status_with_colored_emoji(non_match_segment):
-                            tag_for_segment = "normal"
-                            if "=== Track" in non_match_segment and ("downloaded ===" in non_match_segment or "completed ===" in non_match_segment): tag_for_segment = "downloaded_track"
-                            elif "=== Track" in non_match_segment and "skipped ===" in non_match_segment: tag_for_segment = "skipped_track"
-                            elif "=== Track" in non_match_segment and (("failed (" in non_match_segment and ") ===" in non_match_segment) or "failed ===" in non_match_segment): tag_for_segment = "error"
-                            elif ("[INFO]" in non_match_segment or "[WARNING]" in non_match_segment or 
-                                  "[ERROR]" in non_match_segment or "[CRITICAL]" in non_match_segment): tag_for_segment = "detail_text"
-                            elif "Download stop requested..." in non_match_segment: tag_for_segment = "detail_text"
-                            elif "Track file already exists" in non_match_segment: tag_for_segment = "detail_text"
-                            elif "This song is currently unavailable" in non_match_segment: tag_for_segment = "detail_text"
-                            elif "Stop requested. Cancelling before" in non_match_segment: tag_for_segment = "detail_text"
-                            log_textbox.insert("end", non_match_segment, (tag_for_segment,))
-                    matched_text = content_to_insert[start:end]
-                    if re.fullmatch(url_regex, matched_text, re.IGNORECASE):
-                        log_textbox.insert("end", matched_text, ("hyperlink",))
-                    elif re.search(service_regex, matched_text, re.IGNORECASE):
-                        service_name_match = re.search(r'(' + '|'.join(re.escape(s) for s in SERVICE_COLORS.keys()) + ')', matched_text, re.IGNORECASE)
-                        if service_name_match:
-                            service_name_from_match = service_name_match.group(1).lower()
-                            service_display_name = SERVICE_DISPLAY_NAMES.get(service_name_from_match, service_name_from_match)
-                            service_tag = f"service_{service_name_from_match.replace(' ', '_')}"
-                            
-                            prefix = "Platform: "
-                            log_textbox.insert("end", prefix)
-                            log_textbox.insert("end", service_display_name, (service_tag,))
+        log_textbox.configure(state="normal")
+        try:
+            log_textbox.tag_configure("error", foreground="#FF4444")
+            log_textbox.tag_configure("detail_text", foreground="#A0A0A0")
+            log_textbox.tag_configure("normal", foreground="")
+            log_textbox.tag_configure("hyperlink", foreground="royal blue", underline=True)
+            log_textbox.tag_configure("emoji_success", foreground="#00C851")
+            log_textbox.tag_configure("emoji_error", foreground="#FF4444")
+            log_textbox.tag_configure("emoji_warning", foreground="#CCA700")
+            log_textbox.tag_configure("color_red", foreground="#FF4444")
+            log_textbox.tag_configure("color_yellow", foreground="#FFA500")
+            log_textbox.tag_configure("color_gray", foreground="#A0A0A0")
+            for service, color in SERVICE_COLORS.items():
+                log_textbox.tag_configure(f"service_{service.replace(' ', '_')}", foreground=color)
+                log_textbox.tag_configure(f"platform_{service.replace(' ', '_')}", foreground=color)
+                
+            log_textbox.tag_bind("hyperlink", "<Enter>", lambda e: log_textbox.config(cursor="hand2"))
+            log_textbox.tag_bind("hyperlink", "<Leave>", lambda e: log_textbox.config(cursor=""))
+            log_textbox.tag_bind("hyperlink", "<Button-1>", _on_hyperlink_click)
+        except: 
+            pass
+        emoji_processed = False
+        for emoji, tag in [("✅", "emoji_success"), ("❌", "emoji_error"), ("▶", "emoji_warning"), ("✓", "emoji_success")]:
+            if emoji in content_to_insert:
+                parts = content_to_insert.split(emoji)
+                for i, part in enumerate(parts):
+                    if part:
+                        if "|RED|" in part or "|YELLOW|" in part or "|GRAY|" in part or "|PLATFORM_" in part:
+                            import re
+                            try:
+                                color_parts = []
+                                current_pos = 0
+                                color_markers = re.finditer(r'\|(RED|YELLOW|GRAY|PLATFORM_[A-Z_]+)\|([^|]*?)(?=\||$)', part)
+                                
+                                for marker in color_markers:
+                                    if marker.start() > current_pos:
+                                        text_before = part[current_pos:marker.start()]
+                                        if text_before:
+                                            _insert_text_with_links_and_platforms(text_before, error)
+                                    
+                                    color = marker.group(1).lower()
+                                    text = marker.group(2)
+                                    if color == 'red':
+                                        log_textbox.insert("end", text, ("color_red",))
+                                    elif color == 'yellow':
+                                        log_textbox.insert("end", text, ("color_yellow",))
+                                    elif color == 'gray':
+                                        log_textbox.insert("end", text, ("color_gray",))
+                                    elif color.startswith('platform_'):
+                                        platform_tag = color
+                                        log_textbox.insert("end", text, (platform_tag,))
+                                    current_pos = marker.end()
+                                
+                                if current_pos < len(part):
+                                    remaining_text = part[current_pos:]
+                                    if remaining_text:
+                                        _insert_text_with_links_and_platforms(remaining_text, error)
+                            except:
+                                _insert_text_with_links_and_platforms(part, error)
+                        else:
+                            _insert_text_with_links_and_platforms(part, error)
                     
-                    last_end = end
-                if last_end < len(content_to_insert):
-                    remaining_segment = content_to_insert[last_end:]
-                    if not insert_track_status_with_colored_emoji(remaining_segment):
-                        tag_for_segment = "normal"
-                        if "=== Track" in remaining_segment and ("downloaded ===" in remaining_segment or "completed ===" in remaining_segment): tag_for_segment = "downloaded_track"
-                        elif "=== Track" in remaining_segment and "skipped ===" in remaining_segment: tag_for_segment = "skipped_track"
-                        elif "=== Track" in remaining_segment and (("failed (" in remaining_segment and ") ===" in remaining_segment) or "failed ===" in remaining_segment): tag_for_segment = "error"
-                        elif ("[INFO]" in remaining_segment or "[WARNING]" in remaining_segment or 
-                              "[ERROR]" in remaining_segment or "[CRITICAL]" in remaining_segment): tag_for_segment = "detail_text"
-                        elif "Download stop requested..." in remaining_segment: tag_for_segment = "detail_text"
-                        elif "Track file already exists" in remaining_segment: tag_for_segment = "detail_text"
-                        elif "This song is currently unavailable" in remaining_segment: tag_for_segment = "detail_text"
-                        elif ("Stop requested. Cancelling before" in remaining_segment or 
-                              "Stop requested. Cancelling during" in remaining_segment): tag_for_segment = "detail_text"
-                        elif "Track is not from the correct artist, skipping" in remaining_segment: tag_for_segment = "detail_text"
-                        log_textbox.insert("end", remaining_segment, (tag_for_segment,))
+                    if i < len(parts) - 1:
+                        log_textbox.insert("end", emoji, (tag,))
+                
+                emoji_processed = True
+                break
+        
+        if not emoji_processed:
+            if "=== + " in content_to_insert:
+                parts = content_to_insert.split("=== + ")
+                log_textbox.insert("end", parts[0] + "=== ")
+                log_textbox.insert("end", "✅", ("emoji_success",))
+                if len(parts) > 1:
+                    log_textbox.insert("end", " " + parts[1])
+            elif "=== X " in content_to_insert:
+                parts = content_to_insert.split("=== X ")
+                log_textbox.insert("end", parts[0] + "=== ")
+                log_textbox.insert("end", "❌", ("emoji_error",))
+                if len(parts) > 1:
+                    log_textbox.insert("end", " " + parts[1])
+            elif "=== > " in content_to_insert:
+                parts = content_to_insert.split("=== > ")
+                log_textbox.insert("end", parts[0] + "=== ")
+                log_textbox.insert("end", "▶", ("emoji_warning",))
+                if len(parts) > 1:
+                    log_textbox.insert("end", " " + parts[1])
             else:
-                if not insert_track_status_with_colored_emoji(content_to_insert):
-                    tag_to_use = "normal"
-                    if "=== Track" in content_to_insert and ("downloaded ===" in content_to_insert or "completed ===" in content_to_insert): tag_to_use = "downloaded_track"
-                    elif "=== Track" in content_to_insert and "skipped ===" in content_to_insert: tag_to_use = "skipped_track"
-                    elif "=== Track" in content_to_insert and (("failed (" in content_to_insert and ") ===" in content_to_insert) or "failed ===" in content_to_insert): tag_to_use = "error"
-                    elif ("[INFO]" in content_to_insert or "[WARNING]" in content_to_insert or 
-                          "[ERROR]" in content_to_insert or "[CRITICAL]" in content_to_insert): tag_to_use = "detail_text"
-                    elif "Download stop requested..." in content_to_insert: tag_to_use = "detail_text"
-                    elif "Track file already exists" in content_to_insert: tag_to_use = "detail_text"
-                    elif "This song is currently unavailable" in content_to_insert: tag_to_use = "detail_text"
-                    elif ("Stop requested. Cancelling before" in content_to_insert or 
-                          "Stop requested. Cancelling during" in content_to_insert): tag_to_use = "detail_text"
-                    elif "Track is not from the correct artist, skipping" in content_to_insert: tag_to_use = "detail_text"
-                    log_textbox.insert("end", content_to_insert, (tag_to_use,))
-
-            log_textbox.see("end")
-            log_textbox.configure(state="disabled")
-            
+                import re
+                try:
+                    if "|RED|" in content_to_insert or "|YELLOW|" in content_to_insert or "|GRAY|" in content_to_insert or "|PLATFORM_" in content_to_insert:
+                        parts = []
+                        current_pos = 0
+                        color_markers = re.finditer(r'\|(RED|YELLOW|GRAY|PLATFORM_[A-Z_]+)\|([^|]*?)(?=\||$)', content_to_insert)
+                        
+                        for marker in color_markers:
+                            if marker.start() > current_pos:
+                                parts.append(('text', content_to_insert[current_pos:marker.start()]))
+                            color = marker.group(1).lower()
+                            text = marker.group(2)
+                            parts.append(('color', color, text))
+                            current_pos = marker.end()
+                        if current_pos < len(content_to_insert):
+                            parts.append(('text', content_to_insert[current_pos:]))
+                        for part in parts:
+                            if part[0] == 'text':
+                                _insert_text_with_links_and_platforms(part[1], error)
+                                    
+                            elif part[0] == 'color':
+                                color = part[1]
+                                text = part[2]
+                                if color == 'red':
+                                    log_textbox.insert("end", text, ("color_red",))
+                                elif color == 'yellow':
+                                    log_textbox.insert("end", text, ("color_yellow",))
+                                elif color == 'gray':
+                                    log_textbox.insert("end", text, ("color_gray",))
+                                elif color.startswith('platform_'):
+                                    platform_tag = color
+                                    log_textbox.insert("end", text, (platform_tag,))
+                                else:
+                                    tag = "error" if error else "normal"
+                                    log_textbox.insert("end", text, (tag,))
+                    
+                    else:
+                        _insert_text_with_links_and_platforms(content_to_insert, error)
+                            
+                except re.error as regex_err:
+                    print(f"[Debug] Regex error in log_to_textbox: {regex_err}")
+                    tag = "error" if error else "normal"
+                    log_textbox.insert("end", content_to_insert, (tag,))
             try:
-                if 'app' in globals() and app and app.winfo_exists() and 'log_scrollbar' in globals() and log_scrollbar and log_scrollbar.winfo_exists():
-                    app.after(0, lambda: _check_and_toggle_text_scrollbar(log_textbox, log_scrollbar))
-            except: pass
-    except NameError: print("[Debug] log_to_textbox: NameError (likely widget not ready)")
-    except tkinter.TclError as e: print(f"TclError in log_to_textbox (widget destroyed?): {e}")
+                yview_info = log_textbox.yview()
+                is_at_bottom = yview_info[1] >= 0.95
+                
+                if is_at_bottom:
+                    log_textbox.yview_moveto(1.0)
+                    log_textbox.update()
+            except:
+                pass
+                
+            log_textbox.configure(state="disabled")
+            def delayed_scroll():
+                try:
+                    if log_textbox and log_textbox.winfo_exists():
+                        yview_info = log_textbox.yview()
+                        is_at_bottom = yview_info[1] >= 0.95
+                        
+                        if is_at_bottom:
+                            log_textbox.yview_moveto(1.0)
+                            log_textbox.update_idletasks()
+                except:
+                    pass
+            
+            if 'app' in globals() and app and app.winfo_exists():
+                app.after(10, delayed_scroll)
+        try:
+            if 'app' in globals() and app and app.winfo_exists() and 'log_scrollbar' in globals() and log_scrollbar:
+                app.after(0, lambda: _check_and_toggle_text_scrollbar(log_textbox, log_scrollbar))
+        except: 
+            pass
+            
+    except NameError: 
+        print("[Debug] log_to_textbox: NameError (likely widget not ready)")
+    except tkinter.TclError as e: 
+        print(f"TclError in log_to_textbox (widget destroyed?): {e}")
     except Exception as e:
         print(f"Error in log_to_textbox: {e}")
         try:
             if 'log_textbox' in globals() and log_textbox and log_textbox.winfo_exists():
                 log_textbox.configure(state="disabled")
-        except: pass
+        except: 
+            pass
+
 _has_shown_unavailable_warning = False
+_last_concurrent_download_message = None
 
 def update_log_area():
     global output_queue, app, _has_shown_unavailable_warning, _current_download_context
@@ -1339,16 +1541,35 @@ def update_log_area():
                 msg_strip = msg.strip()
                 if msg_strip.startswith('[Apple Music]'):
                     continue
+                if 'Professional subscription detected' in msg_strip or 'allowing high and lossless quality' in msg_strip:
+                    continue
+                if 'No tracks were deferred due to rate limiting' in msg_strip:
+                    continue
+                if 'Cover resized from' in msg_strip and 'MB to' in msg_strip and 'px)' in msg_strip:
+                    continue
+                if ('All ' in msg_strip and ' tracks available!' in msg_strip and
+                    ('downloaded' in msg_strip or 'already existed' in msg_strip or 'failed' in msg_strip)):
+                    continue
+                if (' tracks processed!' in msg_strip and
+                    ('downloaded' in msg_strip or 'already existed' in msg_strip or 'failed' in msg_strip)):
+                    continue
                 if msg_strip.startswith('=== Downloading track'):
                     _has_shown_unavailable_warning = False
-                if 'This song is currently unavailable' in msg_strip:
+                if 'This song is unavailable' in msg_strip:
                     if not _has_shown_unavailable_warning:
-                        indentation = "       "
-                        log_to_textbox(f"{indentation}This song is currently unavailable.\n")
+                        try:
+                            recent_content = log_textbox.get("end-30l", "end")
+                            if ("=== Downloading album" in recent_content and
+                                "=== Downloading playlist" not in recent_content):
+                                log_to_textbox("       This song is unavailable.\n")
+                            else:
+                                log_to_textbox("       This song is unavailable.\n")
+                        except:
+                            log_to_textbox("       This song is unavailable.\n")
                         _has_shown_unavailable_warning = True
                     continue
                 if 'Failed after 3 attempts' in msg_strip and msg_strip.startswith('[ERROR]'):
-                    log_to_textbox("       [ERROR] Failed after 3 attempts.\n", error=True)
+                    log_to_textbox("[ERROR] Failed after 3 attempts.\n", error=True)
                     continue
                 if 'Track is not from the correct artist, skipping' in msg_strip:
                     log_to_textbox("Track is not from the correct artist, skipping\n")
@@ -1359,29 +1580,21 @@ def update_log_area():
                     continue
                 if '[CRITICAL]' in msg_strip and 'Librespot:Session' in msg_strip and 'Failed reading packet!' in msg_strip:
                     continue
+                if 'Could not get track info for' in msg_strip:
+                    continue
                 if 'Download stop requested...' in msg_strip:
-                    log_to_textbox("       Download stop requested...\n")
+                    log_to_textbox("|GRAY|Download stop requested... Please wait.|RESET|\n")
                     continue
                 if 'tracks in playlist... Please wait.' in msg_strip:
                     fixed_message = msg_strip.lstrip()
                     log_to_textbox(f"{fixed_message}\n")
                     continue
                 if msg_strip.startswith('Fetching ') and any(char.isdigit() for char in msg_strip) and '===' not in msg_strip:
-                    log_to_textbox(f"{msg_strip}\n")
-                    log_to_textbox("\n")
                     continue
-                if msg_strip.startswith('Fetching ') and '=== Downloading artist' in msg_strip:
-                    parts = msg_strip.split('=== Downloading artist')
+                if msg_strip.startswith('Fetching ') and 'Fetching data. Please wait...' in msg_strip:
+                    parts = msg_strip.split('Fetching data. Please wait...')
                     if len(parts) >= 2:
-                        fetching_part = parts[0].strip()
-                        fetch_parts = fetching_part.split('Fetching ')
-                        for i, part in enumerate(fetch_parts):
-                            if part.strip():
-                                if i == 0:
-                                    log_to_textbox(f"{part.strip()}\n")
-                                else:
-                                    log_to_textbox(f"Fetching {part.strip()}\n")
-                        log_to_textbox(f"=== Downloading artist{parts[1]}\n")
+                        log_to_textbox(f"Fetching data. Please wait...\n")
                         continue
                 if 'Processing' in msg_strip and 'standalone tracks...' in msg_strip and 'Artist Progress:' in msg_strip:
                     log_to_textbox(f"{msg}\n")
@@ -1396,6 +1609,17 @@ def update_log_area():
                     continue
                 if '=== ✅ Track completed ===' in msg_strip:
                     log_to_textbox(msg)
+                    continue
+                if ('=== ✅ Album completed ===' in msg_strip or
+                    '=== ✅ Track completed ===' in msg_strip or
+                    '=== ✅ Playlist completed ===' in msg_strip or
+                    '=== ✅ Artist completed ===' in msg_strip):
+                    try:
+                        next_msg = output_queue.get_nowait()
+                        if next_msg.strip():
+                            output_queue.put(next_msg)
+                    except queue.Empty:
+                        pass
                     continue
                 is_error = msg_strip.startswith(('[WARNING]', '[ERROR]'))
                 if is_error and (('Download attempt' in msg_strip and ('failed' in msg_strip or 'Retrying' in msg_strip)) or 
@@ -1414,6 +1638,15 @@ def update_log_area():
                 break
         if 'app' in globals() and app and app.winfo_exists():
             app.update_idletasks()
+            try:
+                if 'log_textbox' in globals() and log_textbox and log_textbox.winfo_exists():
+                    yview_info = log_textbox.yview()
+                    is_at_bottom = yview_info[1] >= 0.95
+                    
+                    if is_at_bottom:
+                        log_textbox.yview_moveto(1.0)
+            except:
+                pass
             
     except Exception as e: 
         print(f"[ERROR] Exception in update_log_area loop: {type(e).__name__}: {e}")
@@ -1562,6 +1795,11 @@ class QueueWriter(io.TextIOBase):
         self.queue = queue_instance
         self.buffer = ''
         self.media_type = media_type
+        self.in_track_context = False
+        self.completed_track_count = 0
+        self.total_tracks = 0
+        self.in_concurrent_download = False
+        
         self.MESSAGES_TO_INDENT = [
             "Downloading encrypted stream...",
             "Getting decryption key...",
@@ -1569,40 +1807,239 @@ class QueueWriter(io.TextIOBase):
             "Applying Apple Music metadata...",
         ]
 
+    def _is_progress_bar_line(self, line):
+        """Check if a line is a tqdm progress bar that should be filtered out."""
+        stripped = line.strip()
+        if not stripped:
+            return False
+        import re
+        if re.search(r'\d+%\|.*\|.*\[.*[KMGT]?B/s.*\]', stripped):
+            return True
+        if ('|' in stripped and
+            re.search(r'\d+\.\d+[KMGT]?B/\d+\.\d+[KMGT]?B', stripped) and
+            re.search(r'\[.*[KMGT]?B/s.*\]', stripped)):
+            return True
+        if re.match(r'^\s*\d+%\|[#\s\-\.]*\|', stripped):
+            return True
+
+        return False
+
     def write(self, msg):
+        if '\r' in msg:
+            parts = msg.split('\r')
+            filtered_parts = []
+            for part in parts:
+                if not self._is_progress_bar_line(part):
+                    filtered_parts.append(part)
+            if filtered_parts:
+                msg = filtered_parts[-1]
+            else:
+                return len(msg)
+
         self.buffer += msg
         if '\n' in self.buffer:
             lines = self.buffer.split('\n')
             for line in lines[:-1]:
-                if self.media_type == DownloadTypeEnum.artist:
-                    stripped_line = line.lstrip()
-                    if ("Processing album track" in stripped_line or 
+                if self._is_progress_bar_line(line):
+                    continue
+                global current_settings
+                is_debug_mode = current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False)
+                if not is_debug_mode and "[gamdl AppleMusicApi DEBUG]" in line:
+                    continue
+                import re
+                line = re.sub(r'(\d+/\d+\s+)\+(\s+)', r'\1✓\2', line)
+                line = re.sub(r'(\d+/\d+\s+)>(\s+)', r'\1▶\2', line)
+                line = re.sub(r'(\d+/\d+\s+)x(\s+)', r'\1✗\2', line)
+                stripped_line = line.lstrip()
+                if ("=== ✅" in line or "=== ❌" in line or
+                    "Track completed" in line or "Track failed" in line or
+                    "Album completed" in line or "Album failed" in line or "Album skipped" in line):
+                    if "=== ✅" in line:
+                        completion_msg = line[line.find("=== ✅"):]
+                    elif "=== ❌" in line:
+                        completion_msg = line[line.find("=== ❌"):]
+                    elif "=== ▶" in line:
+                        completion_msg = line[line.find("=== ▶"):]
+                    else:
+                        completion_msg = stripped_line
+                    self.queue.put(completion_msg.strip() + '\n')
+                    continue
+                if "concurrent downloads for" in stripped_line and ("tracks" in stripped_line or "album tracks" in stripped_line):
+                    import re
+                    match = re.search(r'for (\d+) (?:album )?tracks', stripped_line)
+                    if match:
+                        self.total_tracks = int(match.group(1))
+                        self.completed_track_count = 0
+                        self.in_concurrent_download = True
+                if ("=== ✅ Album completed ===" in stripped_line or 
+                    "=== ✅ Playlist completed ===" in stripped_line or
+                    "=== ✅ Artist completed ===" in stripped_line):
+                    self.in_concurrent_download = False
+                    self.completed_track_count = 0
+                if (not self.media_type or self.media_type == DownloadTypeEnum.track) and (
+                    stripped_line.startswith("Artists:") or
+                    stripped_line.startswith("Release year:") or
+                    stripped_line.startswith("Duration:") or
+                    stripped_line.startswith("Platform:") or
+                    stripped_line.startswith("Codec:") or
+                    stripped_line.startswith("Downloading audio...") or
+                    stripped_line.startswith("Downloading artwork...") or
+                    stripped_line.startswith("Tagging file...") or
+                    stripped_line.startswith("Spotify API error during track download:") or
+                    stripped_line.startswith("[ERROR]") or
+                    stripped_line.startswith("No download info available")):
+                    self.queue.put("       " + stripped_line + '\n')
+                    continue
+
+                if self.media_type == DownloadTypeEnum.artist or self.media_type == DownloadTypeEnum.album or self.media_type == DownloadTypeEnum.playlist:
+                    import re
+                    if "=== ✅ Album completed ===" in line:
+                        line = "=== ✅ Album completed ==="
+                    elif re.match(r'^\s*\d+/\d+\s+[▶✓❌⚠]', line):
+                        if self.media_type == DownloadTypeEnum.artist:
+                            stripped_content = line.strip()
+                            line = "       " + stripped_content
+                        elif self.in_concurrent_download and self.total_tracks > 0:
+                            self.completed_track_count += 1
+                            match = re.match(r'^\s*\d+/\d+\s+([▶✓❌⚠])\s*(.*)', line)
+                            if match:
+                                status_symbol = match.group(1)
+                                track_name = match.group(2)
+                                total_digits = len(str(self.total_tracks))
+                                formatted_line = f"{self.completed_track_count:0{total_digits}d}/{self.total_tracks} {status_symbol} {track_name}"
+                                line = formatted_line
+                            else:
+                                line = stripped_line
+                        else:
+                            line = stripped_line
+                    elif ("Processing album track" in stripped_line or
                         "-> Album Track" in stripped_line or
                         "Processing album" in stripped_line or
                         "Fetching SoundCloud album metadata" in stripped_line or
                         "Downloading album cover" in stripped_line or
-                        ("=== Track" in stripped_line and "downloaded ===" in stripped_line)):
+                        ("=== Track" in stripped_line and ("downloaded ===" in stripped_line or "completed ===" in stripped_line)) or
+                        ("=== Downloading album" in stripped_line) or
+                        ("=== Downloading track" in stripped_line) or
+                        ("=== ❌ Album" in stripped_line and "cancelled ===" in stripped_line)):
                         line = stripped_line
+                    if self.media_type == DownloadTypeEnum.artist:
+                        if "=== Downloading track" in stripped_line:
+                            self.in_track_context = True
+                        elif "=== Downloading album" in stripped_line:
+                            self.in_track_context = False
+                        elif "=== ✅ Track completed ===" in stripped_line:
+                            self.in_track_context = False
+                    if self.media_type == DownloadTypeEnum.artist and self.in_track_context and (
+                        stripped_line.startswith("Artists:") or
+                        stripped_line.startswith("Release year:") or
+                        stripped_line.startswith("Duration:") or
+                        stripped_line.startswith("Platform:") or
+                        stripped_line.startswith("Codec:") or
+                        stripped_line.startswith("Downloading audio...") or
+                        stripped_line.startswith("Downloading artwork...") or
+                        stripped_line.startswith("Tagging file...") or
+                        stripped_line.startswith("Track file already exists") or
+                        "This song is unavailable" in stripped_line or
+                        stripped_line.startswith("Spotify API error during track download:") or
+                        stripped_line.startswith("[ERROR]") or
+                        stripped_line.startswith("No download info available") or
+                        any(msg in stripped_line for msg in self.MESSAGES_TO_INDENT)):
+                        line = "       " + stripped_line
+                    elif self.media_type == DownloadTypeEnum.artist and not self.in_track_context and (
+                        stripped_line.startswith("Artist:") or
+                        stripped_line.startswith("Year:") or
+                        stripped_line.startswith("Duration:") or
+                        stripped_line.startswith("Number of tracks:") or
+                        stripped_line.startswith("Platform:") or
+                        stripped_line.startswith("Skipping unrecognized album item") or
+                        (stripped_line.startswith("Using ") and "concurrent downloads" in stripped_line)):
+                        line = "       " + stripped_line
+                    elif self.media_type == DownloadTypeEnum.artist and not self.in_track_context and (
+                        (stripped_line.startswith("Using ") and "sequential downloads" in stripped_line)):
+                        line = "       " + stripped_line + "\n"
+                    elif self.media_type == DownloadTypeEnum.artist and (
+                        stripped_line.startswith("Track ") and ("Pass" in stripped_line)):
+                        line = "       " + stripped_line
                     elif line.startswith('        ') and not line.startswith('         ') and not line.startswith('=== '):
-                        line = line[1:]
+                        if not (self.media_type == DownloadTypeEnum.artist and re.match(r'^\s*\d+/\d+\s+[▶✓❌⚠]', line)):
+                            line = line[1:]
                 elif self.media_type == DownloadTypeEnum.playlist:
                     stripped_line = line.lstrip()
-                    if line.startswith('        ') and not line.startswith('         ') and not line.startswith('=== '):
-                        line = line[1:]
-                    elif "=== Track" in stripped_line and "downloaded ===" in stripped_line:
+                    if any(msg in stripped_line for msg in self.MESSAGES_TO_INDENT):
+                        line = "        " + stripped_line
+                    elif "=== Track" in stripped_line and ("downloaded ===" in stripped_line or "completed ===" in stripped_line):
                         line = stripped_line
+                    elif (stripped_line.startswith("Using ") and "sequential downloads" in stripped_line):
+                        line = "       " + stripped_line
+                    elif (stripped_line.startswith("Track ") and ("Pass" in stripped_line)):
+                        line = "       " + stripped_line
+                    elif line.startswith('        ') and not line.startswith('         ') and not line.startswith('=== '):
+                        contains_apple_music_msg = any(msg in line for msg in self.MESSAGES_TO_INDENT)
+                        if not contains_apple_music_msg:
+                            line = line[1:]
                 elif self.media_type == DownloadTypeEnum.album:
                     stripped_line = line.lstrip()
-                    if line.startswith('        ') and not line.startswith('         ') and not line.startswith('=== '):
-                        line = line[1:]
-                    elif "=== Track" in stripped_line and "downloaded ===" in stripped_line:
+                    if "=== Downloading track" in stripped_line:
                         line = stripped_line
+                    elif "=== Track" in stripped_line and ("downloaded ===" in stripped_line or "completed ===" in stripped_line):
+                        line = stripped_line
+                    elif "This song is unavailable" in stripped_line:
+                        line = "       " + stripped_line
+                    elif (stripped_line.startswith("Artists:") or
+                          stripped_line.startswith("Release year:") or
+                          stripped_line.startswith("Duration:") or
+                          stripped_line.startswith("Platform:") or
+                          stripped_line.startswith("Codec:") or
+                          stripped_line.startswith("Downloading audio...") or
+                          stripped_line.startswith("Downloading artwork...") or
+                          stripped_line.startswith("Tagging file...") or
+                          stripped_line.startswith("Spotify API error during track download:") or
+                          stripped_line.startswith("[ERROR]") or
+                          stripped_line.startswith("No download info available") or
+                          (len(line) - len(line.lstrip()) >= 16 and any(detail in stripped_line for detail in [
+                              "Artists:", "Release year:", "Duration:", "Platform:", "Codec:",
+                              "Downloading audio...", "Downloading artwork...", "Tagging file..."
+                          ]))):
+                        if len(line) - len(line.lstrip()) >= 16:
+                            line = line
+                        else:
+                            line = "       " + stripped_line
+                    elif any(msg in stripped_line for msg in self.MESSAGES_TO_INDENT):
+                        line = "       " + stripped_line
+                    elif (stripped_line.startswith("Artist:") or
+                          stripped_line.startswith("Year:") or
+                          stripped_line.startswith("Number of tracks:")):
+                        line = "       " + stripped_line
+                    elif (stripped_line.startswith("Using ") and "sequential downloads" in stripped_line):
+                        line = "       " + stripped_line + "\n"
+                    elif (stripped_line.startswith("Track ") and ("Pass" in stripped_line)):
+                        line = "       " + stripped_line
+                    elif line.startswith('        ') and not line.startswith('         ') and not line.startswith('=== '):
+                        line = line[1:]
                 elif self.media_type == DownloadTypeEnum.track:
                     stripped_line = line.lstrip()
-                    if line.startswith('        ') and not line.startswith('         ') and not line.startswith('=== '):
-                        line = line[1:]
-                    elif "=== Track" in stripped_line and "downloaded ===" in stripped_line:
+                    if "=== Downloading track" in stripped_line:
                         line = stripped_line
+                    elif "=== Track" in stripped_line and ("downloaded ===" in stripped_line or "completed ===" in stripped_line):
+                        line = stripped_line
+                    elif any(msg in stripped_line for msg in self.MESSAGES_TO_INDENT):
+                        line = "       " + stripped_line
+                    elif "This song is unavailable" in stripped_line:
+                        line = "       " + stripped_line
+                    elif (stripped_line.startswith("Artists:") or
+                          stripped_line.startswith("Release year:") or
+                          stripped_line.startswith("Duration:") or
+                          stripped_line.startswith("Platform:") or
+                          stripped_line.startswith("Codec:") or
+                          stripped_line.startswith("Downloading audio...") or
+                          stripped_line.startswith("Downloading artwork...") or
+                          stripped_line.startswith("Tagging file...") or
+                          stripped_line.startswith("Spotify API error during track download:") or
+                          stripped_line.startswith("[ERROR]") or
+                          stripped_line.startswith("No download info available")):
+                        line = "       " + stripped_line
+                    elif line.startswith('        ') and not line.startswith('         ') and not line.startswith('=== '):
+                        line = line[1:]
 
                 self.queue.put(line + '\n')
             self.buffer = lines[-1]
@@ -1621,6 +2058,586 @@ class QueueWriter(io.TextIOBase):
 
     def writable(self):
         return True
+
+def run_interruptible_download(download_func, stop_event, *args, **kwargs):
+    """
+    Runs a download function in a way that can be interrupted by checking stop_event.
+    This approach uses a global cancellation flag and monkey-patching to make downloads more responsive to cancellation.
+    """
+    import threading
+    import time
+    global _download_cancelled
+    _download_cancelled = False
+
+    result = {'completed': False, 'exception': None, 'result': None}
+
+    def download_worker():
+        try:
+            result['result'] = download_func(*args, **kwargs)
+            result['completed'] = True
+        except Exception as e:
+            result['exception'] = e
+            result['completed'] = True
+    download_thread = threading.Thread(target=download_worker, daemon=True)
+    download_thread.start()
+    check_interval = 0.1
+    cancellation_timeout = 3.0
+    cancellation_start_time = None
+
+    while download_thread.is_alive():
+        if stop_event.is_set():
+            _download_cancelled = True
+
+            if cancellation_start_time is None:
+                cancellation_start_time = time.time()
+            download_thread.join(timeout=1.0)
+            if time.time() - cancellation_start_time > cancellation_timeout:
+                print("Download cancellation timeout reached. Forcing UI reset.")
+                try:
+                    if 'app' in globals() and app and app.winfo_exists():
+                        app.after(0, lambda: set_ui_state_downloading(False))
+                except:
+                    pass
+                raise DownloadCancelledError("Download cancelled by user (timeout)")
+
+            if not download_thread.is_alive():
+                raise DownloadCancelledError("Download cancelled by user")
+
+        time.sleep(check_interval)
+    _download_cancelled = False
+    if result['exception']:
+        raise result['exception']
+
+    return result['result']
+
+def patch_download_file_for_cancellation():
+    """
+    Monkey-patch the download_file function and concurrent download methods to check for cancellation during downloads.
+    """
+    try:
+        import utils.utils as utils_module
+        if not hasattr(utils_module, '_original_download_file'):
+            utils_module._original_download_file = utils_module.download_file
+
+        def cancellable_download_file(url, file_location, headers={}, enable_progress_bar=False, indent_level=0, artwork_settings=None):
+            global _download_cancelled
+            if _download_cancelled:
+                raise DownloadCancelledError("Download cancelled before file download")
+            import os
+            from tqdm import tqdm
+
+            if os.path.isfile(file_location):
+                return None
+            directory = os.path.dirname(file_location)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory, exist_ok=True)
+
+            r = utils_module.r_session.get(url, stream=True, headers=headers, verify=False)
+
+            total = None
+            if 'content-length' in r.headers:
+                total = int(r.headers['content-length'])
+
+            try:
+                with open(file_location, 'wb') as f:
+                    if enable_progress_bar and total:
+                        import sys
+                        from io import StringIO
+
+                        class IndentedOutput:
+                            def __init__(self, indent_level):
+                                self.indent_level = indent_level
+
+                            def write(self, text):
+                                lines = text.split('\n')
+                                indented_lines = []
+                                for line in lines:
+                                    if line.strip():
+                                        indented_lines.append(' ' * self.indent_level + line)
+                                    else:
+                                        indented_lines.append(line)
+                                sys.stdout.write('\n'.join(indented_lines))
+
+                            def flush(self):
+                                sys.stdout.flush()
+
+                        bar = tqdm(
+                            total=total,
+                            unit='B',
+                            unit_scale=True,
+                            unit_divisor=1024,
+                            initial=0,
+                            miniters=1,
+                            leave=False,
+                            file=IndentedOutput(indent_level)
+                        )
+                        for chunk in r.iter_content(chunk_size=1024):
+                            if _download_cancelled:
+                                bar.close()
+                                if os.path.isfile(file_location):
+                                    os.remove(file_location)
+                                raise DownloadCancelledError("Download cancelled during file transfer")
+
+                            if chunk:
+                                f.write(chunk)
+                                bar.update(len(chunk))
+                        bar.close()
+                    else:
+                        for chunk in r.iter_content(chunk_size=1024):
+                            if _download_cancelled:
+                                if os.path.isfile(file_location):
+                                    os.remove(file_location)
+                                raise DownloadCancelledError("Download cancelled during file transfer")
+
+                            if chunk:
+                                f.write(chunk)
+                if artwork_settings and artwork_settings.get('should_resize', False):
+                    if _download_cancelled:
+                        if os.path.isfile(file_location):
+                            os.remove(file_location)
+                        raise DownloadCancelledError("Download cancelled during artwork processing")
+                    new_resolution = artwork_settings.get('resolution', 1400)
+                    new_format = artwork_settings.get('format', 'jpeg')
+                    if new_format == 'jpg': new_format = 'jpeg'
+                    new_compression = artwork_settings.get('compression', 'low')
+                    if new_compression == 'low':
+                        new_compression = 90
+                    elif new_compression == 'high':
+                        new_compression = 70
+                    if new_format == 'png': new_compression = None
+
+                    from PIL import Image
+                    with Image.open(file_location) as im:
+                        im = im.resize((new_resolution, new_resolution), Image.Resampling.BICUBIC)
+                        im.save(file_location, new_format, quality=new_compression)
+
+            except KeyboardInterrupt:
+                if os.path.isfile(file_location):
+                    print(f'\tDeleting partially downloaded file "{str(file_location)}"')
+                    utils_module.silentremove(file_location)
+                raise KeyboardInterrupt
+            except DownloadCancelledError:
+                if os.path.isfile(file_location):
+                    print(f'\tDeleting partially downloaded file due to cancellation: "{str(file_location)}"')
+                    try:
+                        os.remove(file_location)
+                    except:
+                        pass
+                raise
+            return file_location
+        utils_module.download_file = cancellable_download_file
+        print("[Patch] Applied cancellable download_file patch.")
+        try:
+            from orpheus.music_downloader import Downloader
+            if not hasattr(Downloader, '_original_concurrent_download_tracks'):
+                Downloader._original_concurrent_download_tracks = Downloader._concurrent_download_tracks
+
+            def cancellable_concurrent_download_tracks(self, track_list, download_args_list, concurrent_downloads, performance_summary_indent=0):
+                """Patched version of _concurrent_download_tracks that respects cancellation"""
+                global _download_cancelled
+
+                if concurrent_downloads <= 1:
+                    results = []
+                    for i, (track_info, args) in enumerate(zip(track_list, download_args_list)):
+                        if _download_cancelled:
+                            print(f"Download cancelled during sequential track {i+1}")
+                            break
+                        try:
+                            result = self.download_track(**args)
+                            results.append((i, result, None))
+                        except Exception as e:
+                            results.append((i, None, e))
+                        if _download_cancelled:
+                            print(f"Download cancelled after sequential track {i+1}")
+                            break
+                    return results
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                import queue
+                import threading
+
+                progress_queue = queue.Queue()
+
+                def download_worker(index, args):
+                    if _download_cancelled:
+                        return (index, None, Exception("Download cancelled"))
+
+                    try:
+                        track_id = args.get('track_id', 'Unknown')
+                        track_name = f"Track {track_id}"
+                        track_info_failed = False
+                        track_info_error = None
+                        try:
+                            if _download_cancelled:
+                                return (index, None, Exception("Download cancelled"))
+                                
+                            from utils.models import QualityEnum, CodecOptions
+                            quality_tier = QualityEnum[self.global_settings['general']['download_quality'].upper()]
+                            codec_options = CodecOptions(
+                                spatial_codecs=self.global_settings['codecs']['spatial_codecs'],
+                                proprietary_codecs=self.global_settings['codecs']['proprietary_codecs'],
+                            )
+                            track_info = self.service.get_track_info(track_id, quality_tier, codec_options, **args.get('extra_kwargs', {}))
+                            if track_info and hasattr(track_info, 'name') and track_info.name:
+                                if hasattr(track_info, 'artists') and track_info.artists:
+                                    artists_str = ', '.join(track_info.artists)
+                                    track_name = f"{artists_str} - {track_info.name}"
+                                else:
+                                    track_name = track_info.name
+                        except Exception as e:
+                            track_info_failed = True
+                            track_info_error = e
+                        if track_info_failed:
+                            progress_queue.put((index, track_name, track_info_error))
+                            return (index, None, track_info_error)
+                        if _download_cancelled:
+                            return (index, None, Exception("Download cancelled"))
+                        result = self.download_track(**args, verbose=False)
+                        if _download_cancelled:
+                            return (index, None, Exception("Download cancelled"))
+                        if result is None:
+                            progress_queue.put((index, track_name, "SKIPPED"))
+                        elif result == "RATE_LIMITED":
+                            progress_queue.put((index, track_name, "RATE_LIMITED"))
+                        else:
+                            progress_queue.put((index, track_name, None))
+
+                        return (index, result, None)
+                    except Exception as e:
+                        error_track_name = track_name
+                        if error_track_name.startswith("Track "):
+                            try:
+                                from utils.models import QualityEnum, CodecOptions
+                                quality_tier = QualityEnum[self.global_settings['general']['download_quality'].upper()]
+                                codec_options = CodecOptions(
+                                    spatial_codecs=self.global_settings['codecs']['spatial_codecs'],
+                                    proprietary_codecs=self.global_settings['codecs']['proprietary_codecs'],
+                                )
+                                track_info = self.service.get_track_info(track_id, quality_tier, codec_options, **args.get('extra_kwargs', {}))
+                                if track_info and hasattr(track_info, 'name') and track_info.name:
+                                    if hasattr(track_info, 'artists') and track_info.artists:
+                                        artists_str = ', '.join(track_info.artists)
+                                        error_track_name = f"{artists_str} - {track_info.name}"
+                                    else:
+                                        error_track_name = track_info.name
+                            except Exception:
+                                pass
+
+                        progress_queue.put((index, error_track_name, e))
+                        return (index, None, e)
+                results = []
+                completion_counter = 0
+                with ThreadPoolExecutor(max_workers=concurrent_downloads) as executor:
+                    future_to_index = {}
+                    for i, args in enumerate(download_args_list):
+                        if _download_cancelled:
+                            print(f"Download cancelled before submitting task {i+1}")
+                            break
+                        future = executor.submit(download_worker, i, args)
+                        future_to_index[future] = i
+                    completed_count = 0
+                    total_tasks = len(future_to_index)
+
+                    for future in as_completed(future_to_index):
+                        if _download_cancelled:
+                            for remaining_future in future_to_index:
+                                if not remaining_future.done():
+                                    remaining_future.cancel()
+                            executor.shutdown(wait=False)
+                            break
+
+                        try:
+                            result = future.result()
+                            results.append(result)
+                            completed_count += 1
+                            while not progress_queue.empty():
+                                try:
+                                    index, track_name, status = progress_queue.get_nowait()
+                                    completion_counter += 1
+                                    total_digits = len(str(total_tasks))
+
+                                    if status == "SKIPPED":
+                                        self.print(f'{completion_counter:0{total_digits}d}/{total_tasks} ▶ {track_name} |GRAY|(already exists)', drop_level=0)
+                                    elif status == "RATE_LIMITED":
+                                        self.print(f'{completion_counter:0{total_digits}d}/{total_tasks} ⚠ {track_name} (rate limited)', drop_level=0)
+                                    elif status is not None:
+                                        error_msg = str(status)
+                                        if "Could not get track info for" in error_msg:
+                                            if ":" in error_msg:
+                                                error_reason = error_msg.split(":", 1)[1].strip()
+                                            else:
+                                                error_reason = error_msg
+                                        else:
+                                            error_reason = error_msg
+
+                                        self.print(f'{completion_counter:0{total_digits}d}/{total_tasks} ❌ {track_name}: {error_reason} |GRAY|(failed)', drop_level=0)
+                                    else:
+                                        self.print(f'{completion_counter:0{total_digits}d}/{total_tasks} ✓ {track_name}', drop_level=0)
+                                except queue.Empty:
+                                    break
+                        except Exception as e:
+                            index = future_to_index[future]
+                            results.append((index, None, e))
+                actual_downloaded = sum(1 for r in results if r and r[2] is None and r[1] is not None and r[1] != "RATE_LIMITED")
+                actual_already_existed = sum(1 for r in results if r and r[2] is None and r[1] is None)
+                actual_failed = sum(1 for r in results if r and (r[2] is not None or (r[1] == "RATE_LIMITED")))
+                from utils.models import Oprinter
+
+                if actual_failed > 0:
+                    if actual_downloaded > 0 and actual_already_existed > 0:
+                        Oprinter._original_oprint(self.oprinter, f"All {len(results)} tracks available! ({actual_downloaded} downloaded, {actual_already_existed} already existed, {actual_failed} failed)", drop_level=performance_summary_indent)
+                    elif actual_downloaded > 0:
+                        Oprinter._original_oprint(self.oprinter, f"{actual_downloaded + actual_failed} tracks processed! ({actual_downloaded} downloaded, {actual_failed} failed)", drop_level=performance_summary_indent)
+                    elif actual_already_existed > 0:
+                        Oprinter._original_oprint(self.oprinter, f"{actual_already_existed + actual_failed} tracks processed! ({actual_already_existed} already existed, {actual_failed} failed)", drop_level=performance_summary_indent)
+                    else:
+                        Oprinter._original_oprint(self.oprinter, f"{actual_failed} tracks failed.", drop_level=performance_summary_indent)
+                else:
+                    pass
+
+                return results
+            Downloader._concurrent_download_tracks = cancellable_concurrent_download_tracks
+            print("[Patch] Applied cancellable concurrent download patch.")
+            if not hasattr(Downloader, '_original_download_track'):
+                Downloader._original_download_track = Downloader.download_track
+
+                def cancellable_download_track(self, track_id, **kwargs):
+                    """Patched version of download_track that checks for cancellation"""
+                    global _download_cancelled
+                    if _download_cancelled:
+                        raise DownloadCancelledError("Download cancelled before track download")
+                    return Downloader._original_download_track(self, track_id, **kwargs)
+                Downloader.download_track = cancellable_download_track
+                print("[Patch] Applied cancellable download_track patch.")
+            try:
+                from utils.models import Oprinter
+
+                if not hasattr(Oprinter, '_original_oprint'):
+                    Oprinter._original_oprint = Oprinter.oprint
+
+                    def patched_oprint(self, inp: str, drop_level: int = 0):
+                        inp_str = str(inp)
+                        is_summary_message = (
+                            ("available! (" in inp_str and "downloaded" in inp_str and "already existed" in inp_str) or
+                            ("processed! (" in inp_str) or
+                            ("downloaded successfully!" in inp_str) or
+                            ("failed." in inp_str and "tracks" in inp_str)
+                        ) and not inp_str.strip().startswith("===")
+                        is_completion_message = ("=== " in inp_str and "completed ===" in inp_str)
+
+                        if is_summary_message and not is_completion_message:
+                            return
+                        elif not is_completion_message and any(keyword in inp_str for keyword in [
+                            "tracks processed!", "tracks available!", "tracks downloaded successfully!",
+                            "tracks already existed", "tracks failed.", "Summary:", " tracks "
+                        ]):
+                            original_indent = self.indent_number
+                            self.indent_number = 0
+                            try:
+                                Oprinter._original_oprint(self, inp, drop_level=0)
+                            finally:
+                                self.indent_number = original_indent
+                        else:
+                            Oprinter._original_oprint(self, inp, drop_level)
+
+                    Oprinter.oprint = patched_oprint
+                    print("[Patch] Applied Oprinter patch to remove summary indentation.")
+
+            except Exception as oprinter_e:
+                print(f"[Patch Warning] Could not patch Oprinter: {oprinter_e}")
+            try:
+                if not hasattr(Downloader, '_original_download_artist'):
+                    Downloader._original_download_artist = Downloader.download_artist
+
+                    def patched_download_artist(self, artist_id, **kwargs):
+                        global _download_cancelled
+
+                        try:
+                            result = Downloader._original_download_artist(self, artist_id, **kwargs)
+                            return result
+                        except Exception as e:
+                            if _download_cancelled or "Download cancelled" in str(e):
+                                raise e
+                            else:
+                                raise e
+                    def patched_download_artist_with_status_check(self, artist_id, **kwargs):
+                        global _download_cancelled
+                        original_print = self.print
+
+                        def status_aware_print(message, drop_level=0):
+                            message_str = str(message)
+                            if "completed ===" in message_str and _download_cancelled:
+                                if "=== Artist" in message_str:
+                                    artist_name = message_str.split("=== Artist ")[1].split(" completed ===")[0] if "=== Artist " in message_str else "Unknown"
+                                    original_print(f"=== ❌ Artist {artist_name} cancelled ===", drop_level=drop_level)
+                                    original_print("", drop_level=drop_level)
+                                elif "=== Album" in message_str:
+                                    album_name = message_str.split("=== Album ")[1].split(" completed ===")[0] if "=== Album " in message_str else "Unknown"
+                                    original_print(f"=== ❌ Album {album_name} cancelled ===", drop_level=drop_level)
+                                    original_print("", drop_level=drop_level)
+                                elif "=== Playlist" in message_str:
+                                    playlist_name = message_str.split("=== Playlist ")[1].split(" completed ===")[0] if "=== Playlist " in message_str else "Unknown"
+                                    original_print(f"=== ❌ Playlist {playlist_name} cancelled ===", drop_level=drop_level)
+                                    original_print("", drop_level=drop_level)
+                                elif "=== Track" in message_str:
+                                    track_info = message_str.split("=== Track ")[1].split(" completed ===")[0] if "=== Track " in message_str else "Unknown"
+                                    original_print(f"=== ❌ Track {track_info} cancelled ===", drop_level=drop_level)
+                                    original_print("", drop_level=drop_level)
+                            else:
+                                original_print(message, drop_level=drop_level)
+                        self.print = status_aware_print
+
+                        try:
+                            result = Downloader._original_download_artist(self, artist_id, **kwargs)
+                            return result
+                        finally:
+                            self.print = original_print
+
+                    Downloader.download_artist = patched_download_artist_with_status_check
+                    print("[Patch] Applied download_artist patch to show correct completion status.")
+
+            except Exception as artist_e:
+                print(f"[Patch Warning] Could not patch download_artist: {artist_e}")
+            try:
+                if not hasattr(Downloader, '_original_download_track'):
+                    Downloader._original_download_track = Downloader.download_track
+
+                    def patched_download_track_with_status_check(self, track_id, **kwargs):
+                        global _download_cancelled
+                        original_print = self.print
+
+                        def track_status_aware_print(message, drop_level=0):
+                            message_str = str(message)
+                            if "completed ===" in message_str and _download_cancelled:
+                                if "=== Track" in message_str:
+                                    track_info = message_str.split("=== Track ")[1].split(" completed ===")[0] if "=== Track " in message_str else "Unknown"
+                                    original_print(f"=== ❌ Track {track_info} cancelled ===", drop_level=drop_level)
+                                    original_print("", drop_level=drop_level)
+                            else:
+                                original_print(message, drop_level=drop_level)
+
+                        self.print = track_status_aware_print
+                        try:
+                            result = Downloader._original_download_track(self, track_id, **kwargs)
+                            return result
+                        finally:
+                            self.print = original_print
+
+                    Downloader.download_track = patched_download_track_with_status_check
+                if not hasattr(Downloader, '_original_download_album'):
+                    Downloader._original_download_album = Downloader.download_album
+
+                    def patched_download_album_with_status_check(self, album_id, **kwargs):
+                        global _download_cancelled
+
+                        original_print = self.print
+
+                        def album_status_aware_print(message, drop_level=0):
+                            message_str = str(message)
+                            if "completed ===" in message_str and _download_cancelled:
+                                if "=== Album" in message_str:
+                                    album_name = message_str.split("=== Album ")[1].split(" completed ===")[0] if "=== Album " in message_str else "Unknown"
+                                    original_print(f"=== ❌ Album {album_name} cancelled ===", drop_level=drop_level)
+                                    original_print("", drop_level=drop_level)
+                            else:
+                                original_print(message, drop_level=drop_level)
+
+                        self.print = album_status_aware_print
+                        try:
+                            result = Downloader._original_download_album(self, album_id, **kwargs)
+                            return result
+                        finally:
+                            self.print = original_print
+
+                    Downloader.download_album = patched_download_album_with_status_check
+                if not hasattr(Downloader, '_original_download_playlist'):
+                    Downloader._original_download_playlist = Downloader.download_playlist
+
+                    def patched_download_playlist_with_status_check(self, playlist_id, **kwargs):
+                        global _download_cancelled
+
+                        original_print = self.print
+                        original_download_track = self.download_track
+
+                        def playlist_status_aware_print(message, drop_level=0):
+                            message_str = str(message)
+                            if "completed ===" in message_str and _download_cancelled:
+                                if "=== Playlist" in message_str:
+                                    playlist_name = message_str.split("=== Playlist ")[1].split(" completed ===")[0] if "=== Playlist " in message_str else "Unknown"
+                                    original_print(f"=== ❌ Playlist {playlist_name} cancelled ===", drop_level=drop_level)
+                                    original_print("", drop_level=drop_level)
+                            else:
+                                original_print(message, drop_level=drop_level)
+
+                        def cancellation_aware_download_track(track_id, **track_kwargs):
+                            if _download_cancelled:
+                                service_name = getattr(self, 'service_name', 'Unknown')
+                                raise DownloadCancelledError(f"Download cancelled during {service_name} playlist track processing")
+                            return original_download_track(track_id, **track_kwargs)
+
+                        self.print = playlist_status_aware_print
+                        self.download_track = cancellation_aware_download_track
+                        try:
+                            result = Downloader._original_download_playlist(self, playlist_id, **kwargs)
+                            return result
+                        finally:
+                            self.print = original_print
+                            self.download_track = original_download_track
+
+                    Downloader.download_playlist = patched_download_playlist_with_status_check
+
+                print("[Patch] Applied completion status patches for all download types.")
+                try:
+                    def create_universal_cancellable_method(original_method, method_name, media_type):
+                        """Factory function to create cancellation-aware download methods for all services"""
+                        def universal_cancellable_download(self, *args, **kwargs):
+                            global _download_cancelled
+                            if _download_cancelled:
+                                service_name = getattr(self, 'service_name', 'Unknown')
+                                raise DownloadCancelledError(f"Download cancelled before {service_name} {media_type} processing")
+                            original_print = self.print
+
+                            def cancellation_checking_print(message, drop_level=0):
+                                if _download_cancelled:
+                                    service_name = getattr(self, 'service_name', 'Unknown')
+                                    raise DownloadCancelledError(f"Download cancelled during {service_name} {media_type} processing")
+                                return original_print(message, drop_level=drop_level)
+                            self.print = cancellation_checking_print
+
+                            try:
+                                return original_method(self, *args, **kwargs)
+                            finally:
+                                self.print = original_print
+
+                        return universal_cancellable_download
+                    download_methods = [
+                        ('download_track', 'track'),
+                        ('download_album', 'album'),
+                        ('download_playlist', 'playlist'),
+                        ('download_artist', 'artist')
+                    ]
+
+                    for method_name, media_type in download_methods:
+                        original_attr_name = f'_original_{method_name}_universal_patch'
+                        if not hasattr(Downloader, original_attr_name):
+                            original_method = getattr(Downloader, method_name)
+                            setattr(Downloader, original_attr_name, original_method)
+                            cancellable_method = create_universal_cancellable_method(original_method, method_name, media_type)
+                            setattr(Downloader, method_name, cancellable_method)
+
+                    print("[Patch] Applied universal cancellation patches for all music services (tracks, albums, playlists, and artists).")
+
+                except Exception as universal_e:
+                    print(f"[Patch Warning] Could not patch universal cancellation: {universal_e}")
+
+            except Exception as other_e:
+                print(f"[Patch Warning] Could not patch other download methods: {other_e}")
+
+        except Exception as concurrent_e:
+            print(f"[Patch Warning] Could not patch concurrent downloads: {concurrent_e}")
+
+    except Exception as e:
+        print(f"[Patch Warning] Could not patch download_file for cancellation: {e}")
+
 
 def run_download_in_thread(orpheus, url, output_path, gui_settings, search_result_data=None):
     """Runs the download using the provided global Orpheus instance."""
@@ -1675,7 +2692,10 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             "general": {
                 "download_path": gui_settings.get("globals", {}).get("general", {}).get("output_path", DEFAULT_SETTINGS["globals"]["general"]["output_path"]),
                 "download_quality": gui_settings.get("globals", {}).get("general", {}).get("quality", DEFAULT_SETTINGS["globals"]["general"]["quality"]),
-                "search_limit": gui_settings.get("globals", {}).get("general", {}).get("search_limit", DEFAULT_SETTINGS["globals"]["general"]["search_limit"])
+                "search_limit": gui_settings.get("globals", {}).get("general", {}).get("search_limit", DEFAULT_SETTINGS["globals"]["general"]["search_limit"]),
+                "concurrent_downloads": gui_settings.get("globals", {}).get("general", {}).get("concurrent_downloads", DEFAULT_SETTINGS["globals"]["general"]["concurrent_downloads"]),
+                "play_sound_on_finish": gui_settings.get("globals", {}).get("general", {}).get("play_sound_on_finish", DEFAULT_SETTINGS["globals"]["general"]["play_sound_on_finish"]),
+                "progress_bar": False
             },
             **{k: v for k, v in gui_settings.get("globals", {}).items() if k != "general"}
         }
@@ -1696,6 +2716,11 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         module_controls_dict = orpheus.module_controls
         oprinter = Oprinter()
         downloader = Downloader(settings=downloader_settings, module_controls=module_controls_dict, oprinter=oprinter, path=output_path)
+        downloader.full_settings = {
+            'global': downloader_settings,
+            'modules': gui_settings.get('modules', {})
+        }
+
         settings_global_for_defaults = gui_settings.get("globals", DEFAULT_SETTINGS["globals"])
         module_defaults = settings_global_for_defaults.get("module_defaults", {})
         third_party_modules_dict = { ModuleModes.lyrics: module_defaults.get("lyrics") if module_defaults.get("lyrics") != "default" else None, ModuleModes.covers: module_defaults.get("covers") if module_defaults.get("covers") != "default" else None, ModuleModes.credits: module_defaults.get("credits") if module_defaults.get("credits") != "default" else None }
@@ -1713,6 +2738,8 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                 media_ident: MediaIdentification = module_instance.custom_url_parse(url)
                 if not media_ident: raise ValueError(f"Module '{module_name}' custom_url_parse failed for URL: {url}")
                 media_type = media_ident.media_type; media_id = media_ident.media_id
+                if hasattr(media_ident, 'extra_kwargs') and media_ident.extra_kwargs:
+                    downloader.extra_kwargs = media_ident.extra_kwargs
             else:
                 media_id = None
                 media_type = None
@@ -1779,194 +2806,125 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             
             if media_type == DownloadTypeEnum.track:
                 downloader.set_indent_number(0)
-                
+
                 if stop_event.is_set(): is_cancelled = True
                 else:
-                    yield_to_gui()
-                    oprinter.oprint(f"Processing track: {media_id}")
-                    downloader.download_track(track_id=str(media_id), album_location=output_path + '/')
-                    yield_to_gui()
+                    try:
+                        yield_to_gui()
+                        oprinter.oprint(f"Fetching data. Please wait...\n")
+                        run_interruptible_download(
+                            downloader.download_track,
+                            stop_event,
+                            track_id=str(media_id),
+                            album_location=output_path + '/'
+                        )
+                        yield_to_gui()
+                    except DownloadCancelledError:
+                        is_cancelled = True
+                        print("|GRAY|Stop requested. Cancelling during track download.|RESET|")
             elif media_type == DownloadTypeEnum.playlist:
-                downloader.set_indent_number(0)
-                
-                oprinter.oprint(f"Fetching playlist info: {media_id}")
-                data_dict = {}; raw_result = search_result_data.get('raw_result') if search_result_data else None
-                
-                if module_name == 'beatport' and 'chart' in components:
-                    is_beatport_chart = True
-                
-                if downloader.service_name == 'soundcloud':
+                _current_download_context = DownloadTypeEnum.playlist
+                oprinter.oprint(f'Fetching data. Please wait...\n')
+                if stop_event.is_set():
+                    is_cancelled = True
+                    print("|GRAY|Stop requested. Cancelling before playlist download.|RESET|")
+                else:
                     try:
-                        oprinter.oprint(f"Resolving SoundCloud URL for playlist {media_id}...")
-                        resolved_data = downloader.service.websession.resolve_url(url)
-                        if resolved_data and resolved_data.get('id') == media_id: data_dict = {media_id: resolved_data}
-                        else: oprinter.oprint(f"[Warning] Failed to resolve SoundCloud URL or ID mismatch for {media_id}. Proceeding without pre-fetched data."); data_dict = {}
-                    except Exception as e: oprinter.oprint(f"[Error] Resolving SoundCloud URL failed: {e}"); data_dict = {}
-                playlist_info = None
-                try:
-                    if downloader.service_name == 'soundcloud':
-                        playlist_info = downloader.service.get_playlist_info(playlist_id=media_id, data=data_dict)
-                    elif downloader.service_name == 'deezer':
-                        playlist_info = downloader.service.get_playlist_info(playlist_id=media_id, data={})
-                    elif downloader.service_name == 'beatport' and is_beatport_chart:
-                        playlist_info = downloader.service.get_playlist_info(playlist_id=media_id, is_chart=True)
-                    else:
-                        playlist_info = downloader.service.get_playlist_info(playlist_id=media_id)
-                except Exception as e:
-                    oprinter.oprint(f"[Error] Failed to get playlist info for {media_id}: {e}")
-
-                if playlist_info and playlist_info.tracks:
-                    num_tracks = len(playlist_info.tracks); oprinter.oprint(f"Playlist '{playlist_info.name}' contains {num_tracks} tracks.")
-                    playlist_tags = {}; raw_tags = playlist_info.asdict() if hasattr(playlist_info, 'asdict') else vars(playlist_info)
-                    for k, v in raw_tags.items():
-                        if isinstance(v, (str, int, bool, float)): playlist_tags[k] = re.sub(r'[\\/:*?"<>|]', '_', str(v)).strip() if isinstance(v, str) else v
-                    playlist_tags['explicit'] = ' [E]' if playlist_info.explicit else ''; playlist_path_format = downloader_settings['formatting']['playlist_format']
-                    output_queue.put(f"Starting playlist download: '{playlist_info.name}' ({num_tracks} tracks)\n")
-                    output_queue.put("\n")
-                    try: relative_playlist_path = playlist_path_format.format(**playlist_tags)
-                    except KeyError as fmt_e: print(f"[Warning] Formatting KeyError for playlist path: {fmt_e}. Using default name."); relative_playlist_path = f"Playlist_{media_id}"
-                    relative_playlist_path = re.sub(r'[\\/:*?"<>|]', '_', relative_playlist_path).strip(); full_playlist_path = os.path.join(output_path, relative_playlist_path) + '/'; os.makedirs(full_playlist_path, exist_ok=True)
-
-                    for index, track_id in enumerate(playlist_info.tracks, start=1):
-                        if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before track {index}/{num_tracks}."); break
-                        
+                        if hasattr(downloader, 'extra_kwargs') and downloader.extra_kwargs:
+                            run_interruptible_download(
+                                downloader.download_playlist,
+                                stop_event,
+                                media_id,
+                                extra_kwargs=downloader.extra_kwargs
+                            )
+                        else:
+                            run_interruptible_download(
+                                downloader.download_playlist,
+                                stop_event,
+                                media_id
+                            )
                         yield_to_gui()
-                        
-                        downloader.set_indent_number(0); oprinter.oprint(f"Processing playlist track {index}/{num_tracks}")
-                        percentage = (index / num_tracks) * 100; output_queue.put(f"Progress: Track {index}/{num_tracks} ({percentage:.0f}%)\n")
-                        downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=full_playlist_path, track_index=index, number_of_tracks=num_tracks, extra_kwargs=playlist_info.track_extra_kwargs)
-                        
-                        yield_to_gui()
-                else: oprinter.oprint(f"Could not retrieve playlist info or playlist is empty.")
-            elif media_type == DownloadTypeEnum.album:
-                downloader.set_indent_number(0)
-                
-                oprinter.oprint(f"Fetching album info: {media_id}")
-                data_dict = {}; raw_result = search_result_data.get('raw_result') if search_result_data else None
-                if downloader.service_name == 'soundcloud':
-                    try:
-                        oprinter.oprint(f"Resolving SoundCloud URL for album {media_id}...")
-                        resolved_data = downloader.service.websession.resolve_url(url)
-                        if resolved_data and resolved_data.get('id') == media_id: data_dict = {media_id: resolved_data}
-                        else: oprinter.oprint(f"[Warning] Failed to resolve SoundCloud URL or ID mismatch for album {media_id}."); data_dict = {}
-                    except Exception as e: oprinter.oprint(f"[Error] Resolving SoundCloud URL failed: {e}"); data_dict = {}
-
-                album_info = None
-                try:
-                    if downloader.service_name == 'soundcloud':
-                        album_info = downloader.service.get_album_info(album_id=media_id, data=data_dict)
-                    elif downloader.service_name == 'deezer':
-                         album_info = downloader.service.get_album_info(album_id=media_id, data={})
-                    else:
-                        album_info = downloader.service.get_album_info(album_id=media_id)
-                except Exception as e:
-                     oprinter.oprint(f"[Error] Failed to get album info for {media_id}: {e}")
-
-                if album_info and album_info.tracks:
-                    num_tracks = len(album_info.tracks); output_queue.put(f"Starting album download: '{album_info.name}' ({num_tracks} tracks)\n")
-                    album_path = downloader._create_album_location(output_path, media_id, album_info); downloader.print(f'=== Downloading album {album_info.name} ({media_id}) ==='); downloader._download_album_files(album_path, album_info)
-                    for index, track_id in enumerate(album_info.tracks, start=1):
-                        if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before track {index}/{num_tracks}."); break
-                        
-                        yield_to_gui()
-                        
-                        track_name = track_id.name if hasattr(track_id, 'name') else str(track_id)
-                        downloader.set_indent_number(0); oprinter.oprint(f"Processing album track {index}/{num_tracks}: {track_name}")
-                        percentage = (index / num_tracks) * 100; output_queue.put(f"Progress: Track {index}/{num_tracks} ({percentage:.0f}%)\n")
-                        downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=album_path, track_index=index, number_of_tracks=num_tracks, extra_kwargs=album_info.track_extra_kwargs, indent_level=1)
-                        
-                        yield_to_gui()
-                    downloader.set_indent_number(1)
-                else: oprinter.oprint(f"Could not retrieve album info or album is empty.")
-            elif media_type == DownloadTypeEnum.artist:
-                downloader.set_indent_number(0)
-                
-                oprinter.oprint(f"Fetching artist info: {media_id}")
-                oprinter.oprint("")
-                data_dict = {}; raw_result = search_result_data.get('raw_result') if search_result_data else None
-                if downloader.service_name == 'soundcloud':
-                    try:
-                        oprinter.oprint(f"Resolving SoundCloud URL for artist {media_id}...")
-                        resolved_data = downloader.service.websession.resolve_url(url)
-                        if resolved_data and resolved_data.get('id') == media_id: data_dict = {media_id: resolved_data}
-                        else: oprinter.oprint(f"[Warning] Failed to resolve SoundCloud URL or ID mismatch for {media_id}. Proceeding without pre-fetched data."); data_dict = {}
-                    except Exception as e: oprinter.oprint(f"[Error] Resolving SoundCloud URL failed: {e}"); data_dict = {}
-                
-                artist_info = None
-                try:
-                    if downloader.service_name == 'soundcloud':
-                        artist_info = downloader.service.get_artist_info(artist_id=media_id, get_credited_albums=downloader_settings['artist_downloading']['return_credited_albums'], data=data_dict)
-                    else:
-                        artist_info = downloader.service.get_artist_info(artist_id=media_id, get_credited_albums=downloader_settings['artist_downloading']['return_credited_albums'])
-                except Exception as e:
-                     oprinter.oprint(f"[Error] Failed to get artist info for {media_id}: {e}")
-
-                if artist_info:
-                    artist_name = artist_info.name; oprinter.oprint(f"=== Downloading artist {artist_name} ({media_id}) ===")
-                    sanitized_artist_name = re.sub(r'[\\/:*?"<>|]', '_', artist_name).strip(); artist_path = os.path.join(output_path, sanitized_artist_name) + '/'; os.makedirs(artist_path, exist_ok=True)
-                    num_albums = len(artist_info.albums); tracks_downloaded_in_albums = []
-                    output_queue.put(f"Starting artist download: '{artist_name}' ({num_albums} albums + {len(artist_info.tracks)} potential tracks)\n")
-                    oprinter.oprint(f"Processing {num_albums} albums...")
-
-                    for index, album_id in enumerate(artist_info.albums, start=1):
-                        if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before album {index}/{num_albums}."); break
-                        
-                        yield_to_gui()
-                        
-                        oprinter.oprint(f"Processing album {index}/{num_albums}")
-                        data_dict_for_album = {}
-                        album_info_for_artist = None
-
+                    except DownloadCancelledError:
+                        is_cancelled = True
                         try:
-                            if downloader.service_name == 'soundcloud':
-                                try:
-                                    oprinter.oprint(f"  Fetching SoundCloud album metadata for {album_id}...")
-                                    fetched_album_data = downloader.service.websession._get(f'playlists/{album_id}')
-                                    if fetched_album_data: data_dict_for_album = {album_id: fetched_album_data}
-                                    else: oprinter.oprint(f"  [Warning] Could not fetch metadata for SoundCloud album {album_id}.")
-                                except Exception as e_sc_album: oprinter.oprint(f"  [Error] Fetching SoundCloud album metadata failed: {e_sc_album}")
-                                album_info_for_artist = downloader.service.get_album_info(album_id=album_id, data=data_dict_for_album)
-                            elif downloader.service_name == 'deezer':
-                                album_info_for_artist = downloader.service.get_album_info(album_id=album_id, data={})
-                            else:
-                                album_info_for_artist = downloader.service.get_album_info(album_id=album_id)
-                        except Exception as e_album_get:
-                            oprinter.oprint(f"Could not get info for album {album_id}, skipping. Error: {e_album_get}")
-                            continue
-
-                        if album_info_for_artist and album_info_for_artist.tracks:
-                             album_path = downloader._create_album_location(artist_path, album_id, album_info_for_artist); downloader._download_album_files(album_path, album_info_for_artist)
-                             num_album_tracks = len(album_info_for_artist.tracks); output_queue.put(f"Artist Progress: Album {index}/{num_albums} - '{album_info_for_artist.name}' ({num_album_tracks} tracks)\n")
-                             for track_index, track_id in enumerate(album_info_for_artist.tracks, start=1):
-                                 if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling during album '{album_info_for_artist.name}' before track {track_index}/{num_album_tracks}."); break
-                                 
-                                 yield_to_gui()
-                                 
-                                 track_name_album = track_id.name if hasattr(track_id, 'name') else str(track_id)
-                                 oprinter.oprint(f"Processing album track {track_index}/{num_album_tracks}: {track_name_album}")
-                                 track_percentage = (track_index / num_album_tracks) * 100; output_queue.put(f"-> Album Track {track_index}/{num_album_tracks} ({track_percentage:.0f}%)\n")
-                                 downloader.download_track(track_id=str(track_id.id) if hasattr(track_id, 'id') else str(track_id), album_location=album_path, track_index=track_index, number_of_tracks=num_album_tracks, main_artist=artist_name, extra_kwargs=album_info_for_artist.track_extra_kwargs, indent_level=1)
-                                 tracks_downloaded_in_albums.append(str(track_id.id) if hasattr(track_id, 'id') else str(track_id))
-                                 
-                                 yield_to_gui()
-                             if is_cancelled: break
-                    if is_cancelled: pass
-                    elif not is_cancelled:
-                        skip_tracks = downloader_settings['artist_downloading']['separate_tracks_skip_downloaded']
-                        standalone_tracks = [tid_obj for tid_obj in artist_info.tracks if not skip_tracks or (str(tid_obj.id) if hasattr(tid_obj, 'id') else str(tid_obj)) not in tracks_downloaded_in_albums]; num_standalone = len(standalone_tracks)
-                        if num_standalone > 0:
-                            oprinter.oprint(f"Processing {num_standalone} standalone tracks..."); output_queue.put(f"Artist Progress: Processing {num_standalone} standalone tracks...\n")
-                            for index, track_id_obj in enumerate(standalone_tracks, start=1):
-                                if stop_event.is_set(): is_cancelled = True; oprinter.oprint(f"Stop requested. Cancelling before standalone track {index}/{num_standalone}."); break
-                                
-                                yield_to_gui()
-                                
-                                downloader.set_indent_number(0); oprinter.oprint(f"Processing standalone track {index}/{num_standalone}: {track_id_obj}")
-                                standalone_percentage = (index / num_standalone) * 100; output_queue.put(f"-> Standalone Track {index}/{num_standalone} ({standalone_percentage:.0f}%)\n")
-                                downloader.download_track(track_id=str(track_id_obj.id) if hasattr(track_id_obj, 'id') else str(track_id_obj), album_location=artist_path, main_artist=artist_name, number_of_tracks=1, indent_level=1, extra_kwargs=artist_info.track_extra_kwargs)
-                                
-                                yield_to_gui()
-                else: oprinter.oprint(f"Could not retrieve artist info.")
+                            print(f"=== ❌ Playlist {media_id} cancelled ===")
+                        except UnicodeEncodeError:
+                            print(f"=== X Playlist {media_id} cancelled ===")
+                        print()
+                        print("|GRAY|Stop requested. Cancelling during playlist download.|RESET|")
+                    except Exception as e:
+                        oprinter.oprint(f"Playlist download failed: {str(e)}")
+                        download_exception_occurred = True
+            elif media_type == DownloadTypeEnum.album:
+                _current_download_context = DownloadTypeEnum.album
+                oprinter.oprint(f'Fetching data. Please wait...\n')
+                if stop_event.is_set():
+                    is_cancelled = True
+                    print("|GRAY|Stop requested. Cancelling before album download.|RESET|")
+                else:
+                    try:
+                        if hasattr(downloader, 'extra_kwargs') and downloader.extra_kwargs:
+                            run_interruptible_download(
+                                downloader.download_album,
+                                stop_event,
+                                media_id,
+                                path=output_path,
+                                extra_kwargs=downloader.extra_kwargs
+                            )
+                        else:
+                            extra_kwargs = {} if downloader.service_name in ['deezer', 'jiosaavn'] else None
+                            run_interruptible_download(
+                                downloader.download_album,
+                                stop_event,
+                                media_id,
+                                path=output_path,
+                                extra_kwargs=extra_kwargs
+                            )
+                        yield_to_gui()
+                    except DownloadCancelledError:
+                        is_cancelled = True
+                        try:
+                            print(f"=== ❌ Album {media_id} cancelled ===")
+                        except UnicodeEncodeError:
+                            print(f"=== X Album {media_id} cancelled ===")
+                        print()
+                        print("|GRAY|Stop requested. Cancelling during album download.|RESET|")
+                    except Exception as e:
+                        oprinter.oprint(f"Album download failed: {str(e)}")
+                        download_exception_occurred = True
+            elif media_type == DownloadTypeEnum.artist:
+                _current_download_context = DownloadTypeEnum.artist
+                oprinter.oprint(f'Fetching data. Please wait...\n')
+                if stop_event.is_set():
+                    is_cancelled = True
+                    print("|GRAY|Stop requested. Cancelling before artist download.|RESET|")
+                else:
+                    try:
+                        if hasattr(downloader, 'extra_kwargs') and downloader.extra_kwargs:
+                            run_interruptible_download(
+                                downloader.download_artist,
+                                stop_event,
+                                media_id,
+                                extra_kwargs=downloader.extra_kwargs
+                            )
+                        else:
+                            run_interruptible_download(
+                                downloader.download_artist,
+                                stop_event,
+                                media_id
+                            )
+                        yield_to_gui()
+                    except DownloadCancelledError:
+                        is_cancelled = True
+                        try:
+                            print(f"=== ❌ Artist {media_id} cancelled ===")
+                        except UnicodeEncodeError:
+                            print(f"=== X Artist {media_id} cancelled ===")
+                        print()
+                        print("|GRAY|Stop requested. Cancelling during artist download.|RESET|")
+                    except Exception as e:
+                        oprinter.oprint(f"Artist download failed: {str(e)}")
+                        download_exception_occurred = True
             else: print(f"ERROR: Unknown media type '{media_type.name if hasattr(media_type, 'name') else media_type}' encountered.")
 
             if is_cancelled: print("\nDownload Cancelled.")
@@ -2003,7 +2961,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         download_exception_occurred = True
         if isinstance(e, DownloadCancelledError):
              is_cancelled = True; download_exception_occurred = False
-             print("Download Cancelled (during file transfer).")
+             print("Download Cancelled.")
         else: error_type = type(e).__name__; print(f"\nERROR: {error_type}.\nDetails: {e}\n")
     except Exception as e:
         download_exception_occurred = True
@@ -2033,7 +2991,13 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             )
             print(user_msg + "\n")
         else:
-            print(f"\nUNEXPECTED ERROR during download thread.\nType: {error_type}\nDetails: {error_repr}\nTraceback:\n{tb_str_generic}")
+            try:
+                print(f"\nUNEXPECTED ERROR during download thread.\nType: {error_type}\nDetails: {error_repr}\nTraceback:\n{tb_str_generic}")
+            except UnicodeEncodeError:
+                safe_error_type = str(error_type).encode('ascii', 'replace').decode('ascii')
+                safe_error_repr = str(error_repr).encode('ascii', 'replace').decode('ascii')
+                safe_tb_str = str(tb_str_generic).encode('ascii', 'replace').decode('ascii')
+                print(f"\nUNEXPECTED ERROR during download thread.\nType: {safe_error_type}\nDetails: {safe_error_repr}\nTraceback:\n{safe_tb_str}")
     finally:
         yielding_active.clear()
         
@@ -2267,15 +3231,9 @@ def start_download_thread(search_result_data=None):
         current_batch_output_path = None
 
 def stop_download():
-    global stop_event, output_queue, _current_download_context
+    global stop_event, output_queue
     stop_event.set()
-    if _current_download_context == DownloadTypeEnum.artist:
-        indentation = "                        "
-    elif _current_download_context == DownloadTypeEnum.album:
-        indentation = "                "
-    else:
-        indentation = "        "
-    output_queue.put(f"{indentation}Download stop requested...\n")
+    output_queue.put("|GRAY|Download stop requested... Please wait.|RESET|\n")
 
 def on_platform_change(*args):
     global platform_var
@@ -3226,6 +4184,47 @@ def _on_gui_exit():
         app.destroy()
     print("[Exit] Application shutdown complete.")
 
+def validate_codec_conversions():
+    """Validate codec conversions to prevent circular references and duplicates."""
+    global settings_vars
+    
+    try:
+        codec_vars = settings_vars.get("globals", {}).get("advanced.codec_conversions", {})
+        if not isinstance(codec_vars, dict):
+            return True
+        conversions = {}
+        sources_used = set()
+        
+        for key, var in codec_vars.items():
+            if key.endswith("_source") and isinstance(var, tkinter.StringVar):
+                source_codec = var.get().lower().strip()
+                target_key = key.replace("_source", "_target")
+                
+                if target_key in codec_vars and isinstance(codec_vars[target_key], tkinter.StringVar):
+                    target_codec = codec_vars[target_key].get().lower().strip()
+                    if not source_codec or not target_codec:
+                        continue
+                    if source_codec in sources_used:
+                        show_centered_messagebox("Codec Conversion Error", 
+                                                f"Duplicate source format '{source_codec}' detected!\nEach source format can only have one conversion rule.", 
+                                                "error")
+                        return False
+                    
+                    sources_used.add(source_codec)
+                    conversions[source_codec] = target_codec
+        for source, target in conversions.items():
+            if target in conversions and conversions[target] == source and source != target:
+                show_centered_messagebox("Codec Conversion Error", 
+                                        f"Circular conversion detected!\n'{source}' → '{target}' and '{target}' → '{source}'\n\nThis would create an infinite loop. Please remove one of these conversions.", 
+                                        "error")
+                return False
+        
+        return True
+        
+    except Exception as e:
+        print(f"Error validating codec conversions: {e}")
+        return True
+
 def browse_ffmpeg_path(path_variable):
     filetypes = [("All files", "*.*")]
     if platform.system() == "Windows":
@@ -3346,7 +4345,8 @@ def run_download_in_thread_responsive(orpheus, url, output_path, gui_settings, s
             "general": {
                 "download_path": gui_settings.get("globals", {}).get("general", {}).get("output_path", DEFAULT_SETTINGS["globals"]["general"]["output_path"]),
                 "download_quality": gui_settings.get("globals", {}).get("general", {}).get("quality", DEFAULT_SETTINGS["globals"]["general"]["quality"]),
-                "search_limit": gui_settings.get("globals", {}).get("general", {}).get("search_limit", DEFAULT_SETTINGS["globals"]["general"]["search_limit"])
+                "search_limit": gui_settings.get("globals", {}).get("general", {}).get("search_limit", DEFAULT_SETTINGS["globals"]["general"]["search_limit"]),
+                "progress_bar": False
             },
             **{k: v for k, v in gui_settings.get("globals", {}).items() if k != "general"}
         }
@@ -3459,6 +4459,7 @@ if __name__ == "__main__":
                     "output_path": os.path.join(_SCRIPT_DIR, "Downloads"),
                     "quality": "hifi",
                     "search_limit": 20,
+                    "concurrent_downloads": 3,
                     "play_sound_on_finish": True
                 },
                 "artist_downloading": { "return_credited_albums": True, "separate_tracks_skip_downloaded": True },
@@ -3534,10 +4535,13 @@ if __name__ == "__main__":
         search_process_active = False
         download_process_active = False
         _last_message_was_empty = False
+        _download_cancelled = False
         _created_credential_tabs = set()
         credential_tab_frames = {}
         _context_menu = None
         _target_widget = None
+        patch_download_file_for_cancellation()
+        print("[Patch] Enabled improved download cancellation")
         _hide_menu_binding_id = None
         BUTTON_COLOR = ("#E0E0E0", "#303030")
         BORDER = "#565B5E"
@@ -3786,6 +4790,7 @@ if __name__ == "__main__":
             "general.output_path": "The main folder where all downloads will be saved.",
             "general.quality": "Select the desired audio quality preference.",
             "general.search_limit": "Maximum number of results to display in the Search tab.",
+            "general.concurrent_downloads": "Number of tracks to download simultaneously (1-10).\n\nRecommended values:\n• 1-3: Slower systems, limited bandwidth\n• 4-6: Most systems (balanced speed/stability)\n• 7-10: High-end systems, fast internet.",
             "general.play_sound_on_finish": "Play a notification sound when a download completes.",
             "artist_downloading.return_credited_albums": "Include albums where the artist is credited but not the main artist.",
             "artist_downloading.separate_tracks_skip_downloaded": "When downloading artists, skip tracks that are part of albums already downloaded.",
@@ -3951,11 +4956,10 @@ Unnecessary Lossless-to-Lossless""",
                             codec_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
                             codec_frame.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
                             codec_frame.grid_columnconfigure(2, weight=1)
-
-                            merged_conversions = default_value.copy() if isinstance(default_value, dict) else {}
-                            if isinstance(current_value, dict):
-                                merged_conversions.update(current_value)
-                            current_conversions = merged_conversions
+                            if isinstance(current_value, dict) and current_value:
+                                current_conversions = current_value
+                            else:
+                                current_conversions = default_value if isinstance(default_value, dict) else {}
                             
                             conversion_row = 0
                             
@@ -3971,6 +4975,7 @@ Unnecessary Lossless-to-Lossless""",
                                     target_var = tkinter.StringVar(value=str(target_codec).lower())
                                     target_dropdown = customtkinter.CTkComboBox(codec_frame, variable=target_var, values=codec_options, width=100, state="readonly", dropdown_fg_color="#2B2B2B")
                                     target_dropdown.grid(row=conversion_row, column=2, sticky="w", padx=(0, 5), pady=1)
+                                    
                                     if full_key not in settings_vars["globals"]: settings_vars["globals"][full_key] = {}
                                     settings_vars["globals"][full_key][f"{source_codec}_source"] = source_var
                                     settings_vars["globals"][full_key][f"{source_codec}_target"] = target_var
@@ -4000,6 +5005,33 @@ Unnecessary Lossless-to-Lossless""",
                             if current_val_str not in quality_options: var.set(quality_options[0])
                             widget = customtkinter.CTkComboBox(global_settings_frame, variable=var, values=quality_options, state="readonly", dropdown_fg_color="#2B2B2B")
                             widget.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
+                         elif section_key == "general" and field == "concurrent_downloads":
+                            try:
+                                current_concurrent = int(var.get())
+                                if current_concurrent < 1 or current_concurrent > 10:
+                                    current_concurrent = 3
+                            except (ValueError, TypeError):
+                                current_concurrent = 3
+
+                            slider_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
+                            slider_frame.grid(row=row, column=1, sticky="ew", padx=5, pady=2, columnspan=2)
+                            slider_frame.grid_columnconfigure(0, weight=1)
+
+                            value_label = customtkinter.CTkLabel(slider_frame, text=f"{current_concurrent}", width=70)
+                            value_label.grid(row=0, column=1, sticky="e")
+
+                            def update_concurrent_value(value, var_ref=var, label_ref=value_label):
+                                int_value = int(round(value))
+                                var_ref.set(str(int_value))
+                                label_ref.configure(text=f"{int_value}")
+
+                            slider = customtkinter.CTkSlider(slider_frame, from_=1, to=10, number_of_steps=9, command=update_concurrent_value)
+                            slider.set(current_concurrent)
+                            slider.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+
+                            var.set(str(current_concurrent))
+
+                            widget = slider_frame
                          elif section_key == "covers" and field == "main_compression":
                             compression_options = ["high", "low"]
                             if var.get() not in compression_options: var.set(compression_options[0])
@@ -4183,7 +5215,9 @@ Unnecessary Lossless-to-Lossless""",
             credential_tabs_config[platform_key] = {'frame': platform_tab_frame}
         settings_tabview.set("Global")
         save_controls_frame = customtkinter.CTkFrame(settings_tab, fg_color="transparent"); save_controls_frame.pack(side="bottom", anchor="se", padx=10, pady=(0, 10))
-        save_status_var = tkinter.StringVar(); save_status_label = customtkinter.CTkLabel(save_controls_frame, textvariable=save_status_var, text_color=("#00C851", "#00C851")); save_status_label.pack(side="left", padx=(0, 10))
+        save_status_var = tkinter.StringVar(); save_status_label = customtkinter.CTkLabel(save_controls_frame, textvariable=save_status_var, text_color=("#00C851", "#00C851"))
+        globals()['save_status_label'] = save_status_label
+        save_status_label.pack(side="left", padx=(0, 10))
         save_button = customtkinter.CTkButton(save_controls_frame, text="Save", width=100, height=30, command=handle_save_settings, fg_color="#343638", hover_color="#1F6AA5"); save_button.pack(side="left", padx=5, pady=(0, 0))
         about_tab = tabview.add("About"); about_container = customtkinter.CTkFrame(about_tab, fg_color="transparent"); about_container.pack(fill="both", expand=True, padx=16, pady=(0, 0)); canvas = customtkinter.CTkFrame(about_container, fg_color="transparent"); canvas.pack(fill="both", expand=True); about_frame = customtkinter.CTkFrame(canvas, fg_color="transparent"); about_frame.pack(fill="x", expand=False, pady=10)
         icon_title_frame = customtkinter.CTkFrame(about_frame, fg_color="transparent")
