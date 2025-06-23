@@ -1589,12 +1589,20 @@ def update_log_area():
                     fixed_message = msg_strip.lstrip()
                     log_to_textbox(f"{fixed_message}\n")
                     continue
-                if msg_strip.startswith('Fetching ') and any(char.isdigit() for char in msg_strip) and '===' not in msg_strip:
-                    continue
                 if msg_strip.startswith('Fetching ') and 'Fetching data. Please wait...' in msg_strip:
                     parts = msg_strip.split('Fetching data. Please wait...')
                     if len(parts) >= 2:
                         log_to_textbox(f"Fetching data. Please wait...\n")
+                        continue
+                import re
+                if re.search(r'Fetching \d+/\d+', msg_strip):
+                    if '===' in msg_strip:
+                        cleaned_msg = re.sub(r'Fetching \d+/\d+', '', msg_strip)
+                        cleaned_msg = cleaned_msg.strip()
+                        if cleaned_msg:
+                            log_to_textbox(f"{cleaned_msg}\n")
+                        continue
+                    else:
                         continue
                 if 'Processing' in msg_strip and 'standalone tracks...' in msg_strip and 'Artist Progress:' in msg_strip:
                     log_to_textbox(f"{msg}\n")
