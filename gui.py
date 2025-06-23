@@ -10,19 +10,7 @@ if getattr(sys, 'frozen', False):
     if os.path.isdir(gamdl_parent_path):
         sys.path.insert(0, gamdl_parent_path)
 os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
-try:
-    import sentry_sdk
-    sentry_sdk.init(
-        dsn="https://0219493f093f41e8338bced7ea8a5135@o4509519200321536.ingest.de.sentry.io/4509519204057168",
-        traces_sample_rate=0.1,
-        send_default_pii=False,
-        environment=os.getenv("SENTRY_ENVIRONMENT", "production"),
-        attach_stacktrace=True,
-        release=os.getenv("ORPHEUS_VERSION", "unknown"),
-    )
-    sentry_sdk.set_tag("component", "gui")
-except ImportError:
-    pass
+
 import copy
 import customtkinter
 import datetime
@@ -1328,19 +1316,9 @@ def log_to_textbox(msg, error=False):
         ]) or any(pattern in msg for pattern in [
             "Download speed: ",
             "Download time: "
-        ]) or (
-            "concurrent downloads for" in msg and 
-            (" album tracks" in msg or " artist tracks" in msg)
-        ):
+        ]):
             return
-        global _last_concurrent_download_message
-        if ("=== Downloading" in msg and any(media_type in msg for media_type in ["album", "playlist", "artist", "track"])):
-            _last_concurrent_download_message = None
-        if "Using" in msg and "concurrent downloads for" in msg and "tracks" in msg:
-            core_message = msg.strip()
-            if core_message == _last_concurrent_download_message:
-                return
-            _last_concurrent_download_message = core_message
+
         content_to_insert = _clean_ansi_and_process_markers(msg)
         is_current_empty = not content_to_insert.strip()
         if is_current_empty and _last_message_was_empty: 
@@ -1525,7 +1503,6 @@ def log_to_textbox(msg, error=False):
             pass
 
 _has_shown_unavailable_warning = False
-_last_concurrent_download_message = None
 
 def update_log_area():
     global output_queue, app, _has_shown_unavailable_warning, _current_download_context
@@ -1844,6 +1821,7 @@ class QueueWriter(io.TextIOBase):
             else:
                 return len(msg)
 
+
         self.buffer += msg
         if '\n' in self.buffer:
             lines = self.buffer.split('\n')
@@ -1872,13 +1850,7 @@ class QueueWriter(io.TextIOBase):
                         completion_msg = stripped_line
                     self.queue.put(completion_msg.strip() + '\n')
                     continue
-                if "concurrent downloads for" in stripped_line and ("tracks" in stripped_line or "album tracks" in stripped_line):
-                    import re
-                    match = re.search(r'for (\d+) (?:album )?tracks', stripped_line)
-                    if match:
-                        self.total_tracks = int(match.group(1))
-                        self.completed_track_count = 0
-                        self.in_concurrent_download = True
+
                 if ("=== ✅ Album completed ===" in stripped_line or 
                     "=== ✅ Playlist completed ===" in stripped_line or
                     "=== ✅ Artist completed ===" in stripped_line):
@@ -1983,7 +1955,7 @@ class QueueWriter(io.TextIOBase):
                         line = "        " + stripped_line
                     elif "=== Track" in stripped_line and ("downloaded ===" in stripped_line or "completed ===" in stripped_line):
                         line = stripped_line
-                    elif (stripped_line.startswith("Using ") and "sequential downloads" in stripped_line):
+                    elif (stripped_line.startswith("Using ") and ("sequential downloads" in stripped_line or "concurrent downloads" in stripped_line)):
                         line = "       " + stripped_line
                     elif (stripped_line.startswith("Track ") and ("Pass" in stripped_line)):
                         line = "       " + stripped_line
@@ -2027,8 +1999,8 @@ class QueueWriter(io.TextIOBase):
                           stripped_line.startswith("Year:") or
                           stripped_line.startswith("Number of tracks:")):
                         line = "       " + stripped_line
-                    elif (stripped_line.startswith("Using ") and "sequential downloads" in stripped_line):
-                        line = "       " + stripped_line + "\n"
+                    elif (stripped_line.startswith("Using ") and ("sequential downloads" in stripped_line or "concurrent downloads" in stripped_line)):
+                        line = "       " + stripped_line
                     elif (stripped_line.startswith("Track ") and ("Pass" in stripped_line)):
                         line = "       " + stripped_line
                     elif line.startswith('        ') and not line.startswith('         ') and not line.startswith('=== '):
@@ -2255,6 +2227,7 @@ def patch_download_file_for_cancellation():
                 should_indent_tracks = True
 
                 if concurrent_downloads <= 1:
+                    self.print("Using sequential downloads (sync)")
                     results = []
                     for i, (track_info, args) in enumerate(zip(track_list, download_args_list)):
                         if _download_cancelled:
@@ -2272,6 +2245,8 @@ def patch_download_file_for_cancellation():
                 from concurrent.futures import ThreadPoolExecutor, as_completed
                 import queue
                 import threading
+                total_tracks = len(track_list)
+                self.print(f"Using {concurrent_downloads} concurrent downloads for {total_tracks} tracks", drop_level=performance_summary_indent)
 
                 progress_queue = queue.Queue()
 
@@ -2476,7 +2451,7 @@ def patch_download_file_for_cancellation():
                             return
                         elif not is_completion_message and any(keyword in inp_str for keyword in [
                             "tracks processed!", "tracks available!", "tracks downloaded successfully!",
-                            "tracks already existed", "tracks failed.", "Summary:", " tracks "
+                            "tracks already existed", "tracks failed.", "Summary:"
                         ]):
                             original_indent = self.indent_number
                             self.indent_number = 0
