@@ -1899,6 +1899,12 @@ class QueueWriter(io.TextIOBase):
                         if self.media_type == DownloadTypeEnum.artist:
                             stripped_content = line.strip()
                             line = "       " + stripped_content
+                        elif self.media_type == DownloadTypeEnum.album:
+                            stripped_content = line.strip()
+                            line = "       " + stripped_content
+                        elif self.media_type == DownloadTypeEnum.playlist:
+                            stripped_content = line.strip()
+                            line = "       " + stripped_content
                         elif self.in_concurrent_download and self.total_tracks > 0:
                             self.completed_track_count += 1
                             match = re.match(r'^\s*\d+/\d+\s+([▶✓❌⚠])\s*(.*)', line)
@@ -1979,7 +1985,10 @@ class QueueWriter(io.TextIOBase):
                             line = line[1:]
                 elif self.media_type == DownloadTypeEnum.album:
                     stripped_line = line.lstrip()
-                    if "=== Downloading track" in stripped_line:
+                    import re
+                    if re.match(r'^\d+/\d+\s+[▶✓❌⚠]', stripped_line):
+                        line = "       " + stripped_line
+                    elif "=== Downloading track" in stripped_line:
                         line = stripped_line
                     elif "=== Track" in stripped_line and ("downloaded ===" in stripped_line or "completed ===" in stripped_line):
                         line = stripped_line
@@ -2235,6 +2244,7 @@ def patch_download_file_for_cancellation():
             def cancellable_concurrent_download_tracks(self, track_list, download_args_list, concurrent_downloads, performance_summary_indent=0):
                 """Patched version of _concurrent_download_tracks that respects cancellation"""
                 global _download_cancelled
+                should_indent_tracks = True
 
                 if concurrent_downloads <= 1:
                     results = []
@@ -2354,11 +2364,12 @@ def patch_download_file_for_cancellation():
                                     index, track_name, status = progress_queue.get_nowait()
                                     completion_counter += 1
                                     total_digits = len(str(total_tasks))
-
+                                    indent_prefix = "       " if should_indent_tracks else ""
+                                    
                                     if status == "SKIPPED":
-                                        self.print(f'{completion_counter:0{total_digits}d}/{total_tasks} ▶ {track_name} |GRAY|(already exists)', drop_level=0)
+                                        self.print(f'{indent_prefix}{completion_counter:0{total_digits}d}/{total_tasks} ▶ {track_name} |GRAY|(already exists)', drop_level=1)
                                     elif status == "RATE_LIMITED":
-                                        self.print(f'{completion_counter:0{total_digits}d}/{total_tasks} ⚠ {track_name} (rate limited)', drop_level=0)
+                                        self.print(f'{indent_prefix}{completion_counter:0{total_digits}d}/{total_tasks} ⚠ {track_name} (rate limited)', drop_level=1)
                                     elif status is not None:
                                         error_msg = str(status)
                                         if "Could not get track info for" in error_msg:
@@ -2369,9 +2380,9 @@ def patch_download_file_for_cancellation():
                                         else:
                                             error_reason = error_msg
 
-                                        self.print(f'{completion_counter:0{total_digits}d}/{total_tasks} ❌ {track_name}: {error_reason} |GRAY|(failed)', drop_level=0)
+                                        self.print(f'{indent_prefix}{completion_counter:0{total_digits}d}/{total_tasks} ❌ {track_name}: {error_reason} |GRAY|(failed)', drop_level=1)
                                     else:
-                                        self.print(f'{completion_counter:0{total_digits}d}/{total_tasks} ✓ {track_name}', drop_level=0)
+                                        self.print(f'{indent_prefix}{completion_counter:0{total_digits}d}/{total_tasks} ✓ {track_name}', drop_level=1)
                                 except queue.Empty:
                                     break
                         except Exception as e:
@@ -2397,6 +2408,34 @@ def patch_download_file_for_cancellation():
                 return results
             Downloader._concurrent_download_tracks = cancellable_concurrent_download_tracks
             print("[Patch] Applied cancellable concurrent download patch.")
+            try:
+                original_concurrent_func = Downloader._original_concurrent_download_tracks
+                
+                def patched_original_concurrent_download_tracks(self, track_list, download_args_list, concurrent_downloads, performance_summary_indent=0):
+                    original_print_method = self.print
+                    def indentation_aware_print(message, drop_level=0):
+                        message_str = str(message)
+                        is_track_progress = ('/' in message_str and 
+                                           any(symbol in message_str for symbol in ['▶', '✓', '❌', '⚠']) and
+                                           ('already exists' in message_str or 'failed' in message_str or 'rate limited' in message_str or 
+                                            not any(keyword in message_str for keyword in ['Using', 'Summary:', 'Download'])))
+                        
+                        if is_track_progress:
+                            indented_message = "       " + message_str
+                            original_print_method(indented_message, drop_level=1)
+                        else:
+                            original_print_method(message, drop_level=drop_level)
+                    self.print = indentation_aware_print
+                    
+                    try:
+                        return original_concurrent_func(self, track_list, download_args_list, concurrent_downloads, performance_summary_indent)
+                    finally:
+                        self.print = original_print_method
+                Downloader._original_concurrent_download_tracks = patched_original_concurrent_download_tracks
+                print("[Patch] Applied indentation patch to original concurrent download function.")
+                
+            except Exception as e:
+                print(f"[Patch Warning] Could not patch original concurrent download indentation: {e}")
             if not hasattr(Downloader, '_original_download_track'):
                 Downloader._original_download_track = Downloader.download_track
 
@@ -2416,6 +2455,7 @@ def patch_download_file_for_cancellation():
 
                     def patched_oprint(self, inp: str, drop_level: int = 0):
                         inp_str = str(inp)
+                        
                         is_summary_message = (
                             ("available! (" in inp_str and "downloaded" in inp_str and "already existed" in inp_str) or
                             ("processed! (" in inp_str) or
@@ -4459,7 +4499,7 @@ if __name__ == "__main__":
                     "output_path": os.path.join(_SCRIPT_DIR, "Downloads"),
                     "quality": "hifi",
                     "search_limit": 20,
-                    "concurrent_downloads": 3,
+                    "concurrent_downloads": 5,
                     "play_sound_on_finish": True
                 },
                 "artist_downloading": { "return_credited_albums": True, "separate_tracks_skip_downloaded": True },
