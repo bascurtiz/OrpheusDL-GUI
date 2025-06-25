@@ -4207,6 +4207,90 @@ def _on_gui_exit():
         app.destroy()
     print("[Exit] Application shutdown complete.")
 
+def _setup_macos_window_management():
+    """Sets up macOS-specific window management to handle minimize behavior."""
+    global app
+    
+    if platform.system() != "Darwin":
+        return
+    global _is_window_minimized, _restore_timer_id
+    _is_window_minimized = False
+    _restore_timer_id = None
+    
+    def restore_window():
+        """Restore the window from minimized state."""
+        global _is_window_minimized, _restore_timer_id
+        try:
+            if _is_window_minimized:
+                print("[macOS] Restoring window from minimized state")
+                _is_window_minimized = False
+                if _restore_timer_id:
+                    app.after_cancel(_restore_timer_id)
+                    _restore_timer_id = None
+                app.deiconify()
+                app.lift()
+                app.focus_force()
+        except Exception as e:
+            print(f"[macOS] Error restoring window: {e}")
+    
+    def on_window_unmap(event=None):
+        """Handle window unmap events (minimize/hide)."""
+        global _is_window_minimized, _restore_timer_id
+        
+        if event and event.widget != app:
+            return
+        
+        try:
+            current_state = app.state()
+            if current_state == 'iconic' and not _is_window_minimized:
+                print("[macOS] Window minimized, switching to withdraw() to fix dock behavior")
+                _is_window_minimized = True
+                app.after_idle(lambda: app.withdraw())
+                def check_for_restore():
+                    global _restore_timer_id
+                    if _is_window_minimized:
+                        _restore_timer_id = app.after(200, check_for_restore)
+                
+                check_for_restore()
+                
+        except Exception as e:
+            print(f"[macOS] Error in window unmap handler: {e}")
+    
+    def on_window_map(event=None):
+        """Handle window map events (restore/show)."""
+        global _is_window_minimized, _restore_timer_id
+        
+        if event and event.widget != app:
+            return
+            
+        if _is_window_minimized:
+            print("[macOS] Window mapped - restoring from minimized state")
+            _is_window_minimized = False
+            if _restore_timer_id:
+                app.after_cancel(_restore_timer_id)
+                _restore_timer_id = None
+    
+    def on_focus_in(event=None):
+        """Handle window focus events."""
+        global _is_window_minimized
+        if _is_window_minimized and event and event.widget == app:
+            restore_window()
+    
+    try:
+        app.bind('<Unmap>', on_window_unmap)
+        app.bind('<Map>', on_window_map)
+        app.bind('<FocusIn>', on_focus_in)
+        try:
+            app.createcommand('::tk::mac::ReopenApplication', restore_window)
+            print("[macOS] Added dock menu restore command")
+        except Exception as menu_e:
+            print(f"[macOS] Could not set up dock menu (normal on non-bundled apps): {menu_e}")
+        
+        print("[macOS] Window management setup complete")
+        
+    except Exception as e:
+        print(f"[macOS] Error setting up window management: {e}")
+
 def validate_codec_conversions():
     """Validate codec conversions to prevent circular references and duplicates."""
     global settings_vars
@@ -5382,6 +5466,8 @@ Unnecessary Lossless-to-Lossless""",
 
         _initial_ui_update()
         app.protocol("WM_DELETE_WINDOW", _on_gui_exit)
+        _setup_macos_window_management()
+        
         app.mainloop()
     else:
         print(f"[Child Process {os.getpid()}] Detected, exiting.")
