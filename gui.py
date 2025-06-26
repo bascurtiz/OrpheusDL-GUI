@@ -1224,9 +1224,10 @@ def _clean_ansi_and_process_markers(text):
     text = re.sub(gray_pattern, r'|GRAY|\1|RESET|', text)
     text = re.sub(r'(\d+/\d+\s+)(?:\033\[[0-9;]*m)?\+(?:\033\[[0-9;]*m)?(\s+)', r'\1✓\2', text)
     text = re.sub(r'(\d+/\d+\s+)(?:\033\[[0-9;]*m)?>(?:\033\[[0-9;]*m)?(\s+)', r'\1▶\2', text)
-    text = re.sub(r'(\d+/\d+\s+)(\033\[91m)[xX](\033\[0m)(\s+)', r'\1\2❌\3\4', text)
-    text = re.sub(r'(\d+/\d+\s+)(?:\033\[[0-9;]*m)?[xX](?:\033\[[0-9;]*m)?(\s+)', r'\1❌\2', text)
-    text = re.sub(r'(\033\[91m)X(\033\[0m)', r'\1❌\2', text)
+    text = re.sub(r'(\d+/\d+\s+)(\033\[91m)[xX](\033\[0m)(\s+)', r'\1❌\4', text)
+    text = re.sub(r'(\033\[91m)X(\033\[0m)', r'❌', text)
+    text = re.sub(r'(\d+/\d+\s+)(✗)(\s+)', r'\1|ERROR_SYMBOL|\2|RESET|\3', text)
+    text = re.sub(r'(===\s*)(✗)(\s+Track failed\s*===)', r'\1|ERROR_SYMBOL|\2|RESET|\3', text)
     yellow_pattern = r'\033\[33m(.*?)\033\[0m'
     def yellow_replacer(match):
         content = match.group(1)
@@ -1403,10 +1404,15 @@ def log_to_textbox(msg, error=False):
                 log_textbox.insert("end", "✅", ("emoji_success",))
                 if len(parts) > 1:
                     log_textbox.insert("end", " " + parts[1])
-            elif "=== X " in content_to_insert:
-                parts = content_to_insert.split("=== X ")
+            elif "=== X " in content_to_insert or "=== ✗ " in content_to_insert:
+                if "=== X " in content_to_insert:
+                    parts = content_to_insert.split("=== X ")
+                    symbol = "❌"
+                else:
+                    parts = content_to_insert.split("=== ✗ ")
+                    symbol = "❌"
                 log_textbox.insert("end", parts[0] + "=== ")
-                log_textbox.insert("end", "❌", ("emoji_error",))
+                log_textbox.insert("end", symbol, ("emoji_error",))
                 if len(parts) > 1:
                     log_textbox.insert("end", " " + parts[1])
             elif "=== > " in content_to_insert:
@@ -1418,10 +1424,10 @@ def log_to_textbox(msg, error=False):
             else:
                 import re
                 try:
-                    if "|RED|" in content_to_insert or "|YELLOW|" in content_to_insert or "|GRAY|" in content_to_insert or "|PLATFORM_" in content_to_insert:
+                    if "|RED|" in content_to_insert or "|YELLOW|" in content_to_insert or "|GRAY|" in content_to_insert or "|ERROR_SYMBOL|" in content_to_insert or "|PLATFORM_" in content_to_insert:
                         parts = []
                         current_pos = 0
-                        color_markers = re.finditer(r'\|(RED|YELLOW|GRAY|PLATFORM_[A-Z_]+)\|([^|]*?)(?=\||$)', content_to_insert)
+                        color_markers = re.finditer(r'\|(RED|YELLOW|GRAY|ERROR_SYMBOL|PLATFORM_[A-Z_]+)\|([^|]*?)(?=\||$)', content_to_insert)
                         
                         for marker in color_markers:
                             if marker.start() > current_pos:
@@ -1445,6 +1451,8 @@ def log_to_textbox(msg, error=False):
                                     log_textbox.insert("end", text, ("color_yellow",))
                                 elif color == 'gray':
                                     log_textbox.insert("end", text, ("color_gray",))
+                                elif color == 'error_symbol':
+                                    log_textbox.insert("end", text, ("emoji_error",))
                                 elif color.startswith('platform_'):
                                     platform_tag = color
                                     log_textbox.insert("end", text, (platform_tag,))
