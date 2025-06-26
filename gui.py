@@ -3086,7 +3086,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                             elif current_platform == "Darwin":
                                 sound_file = "/System/Library/Sounds/Glass.aiff" if success else "/System/Library/Sounds/Sosumi.aiff"
                                 if os.path.exists(sound_file):
-                                    subprocess.run(["afplay", sound_file], check=False, capture_output=True)
+                                    subprocess.Popen(["afplay", sound_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                                     sound_played = True
                                 
                             if sound_played:
