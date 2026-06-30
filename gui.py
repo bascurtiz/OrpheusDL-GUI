@@ -1592,6 +1592,7 @@ def amazonmusic_oauth_flow_handler(oauth_url: str, application_name: str) -> str
 
 file_download_queue = []
 output_queue = queue.Queue()
+_active_download_thread = None
 current_batch_output_path = None
 _current_download_context = None
 spotify_pre_download_warning_acknowledged = False
@@ -8042,6 +8043,38 @@ class DownloadCancelledError(Exception):
     """Locally defined placeholder for missing exception."""
     pass
 
+
+def _cancelled_completion_replacement(message_str):
+    """Map a completion header to a cancelled header when a download was stopped."""
+    if not globals().get('_download_cancelled') or 'completed ===' not in message_str:
+        return None
+    import re
+    if re.search(r'\bAlbum\s+completed\b', message_str):
+        return '=== ❌ Album cancelled ==='
+    if re.search(r'\bPlaylist\s+completed\b', message_str):
+        return '=== ❌ Playlist cancelled ==='
+    if re.search(r'\bArtist\s+completed\b', message_str):
+        return '=== ❌ Artist cancelled ==='
+    if re.search(r'\bTrack\s+completed\b', message_str):
+        return '=== ❌ Track cancelled ==='
+    return None
+
+
+def _wait_for_active_download_thread_to_stop(timeout=120):
+    """Block until a prior download worker exits so its stdout cannot pollute a new session."""
+    global _active_download_thread
+    thread = _active_download_thread
+    if thread is None or not thread.is_alive():
+        return True
+    if 'output_queue' in globals() and output_queue:
+        output_queue.put('|GRAY|Waiting for previous download to finish stopping...|RESET|\n')
+    thread.join(timeout=timeout)
+    if thread.is_alive():
+        if 'output_queue' in globals() and output_queue:
+            output_queue.put('|GRAY|Previous download is still stopping. Please try again shortly.|RESET|\n')
+        return False
+    return True
+
 class QualityEnum(enum.Enum):
     MINIMUM = 1
     LOW = 2
@@ -10782,15 +10815,14 @@ def update_log_area():
                     log_to_textbox(msg)
                     continue
                 if ('=== ✅ Album completed ===' in msg_strip or
+                    '=== ✓ Album completed ===' in msg_strip or
                     '=== ✅ Track completed ===' in msg_strip or
+                    '=== ✓ Track completed ===' in msg_strip or
                     '=== ✅ Playlist completed ===' in msg_strip or
-                    '=== ✅ Artist completed ===' in msg_strip):
-                    try:
-                        next_msg = output_queue.get_nowait()
-                        if next_msg.strip():
-                            output_queue.put(next_msg)
-                    except queue.Empty:
-                        pass
+                    '=== ✓ Playlist completed ===' in msg_strip or
+                    '=== ✅ Artist completed ===' in msg_strip or
+                    '=== ✓ Artist completed ===' in msg_strip):
+                    log_to_textbox(msg)
                     continue
                 is_error = msg_strip.startswith(('[WARNING]', '[ERROR]'))
                 if is_error and (('Download attempt' in msg_strip and ('failed' in msg_strip or 'Retrying' in msg_strip)) or 
@@ -11092,6 +11124,31 @@ def _check_and_toggle_text_scrollbar(text_widget, scrollbar_widget):
         else: 
             print(f"Error checking/toggling text scrollbar: {e}")
 
+def _is_gamdl_verbose_log_line(line: str) -> bool:
+    """Return True for gamdl/Apple Music internal logs that should stay hidden unless debug mode is on."""
+    stripped = (line or "").strip()
+    if not stripped:
+        return False
+    lowered = stripped.lower()
+    if '[apple music debug]' in lowered:
+        return True
+    if '[gamdl' in lowered:
+        return True
+    if lowered.startswith('downloading and processing ') and ' track...' in lowered:
+        return True
+    if lowered.startswith('detected stream:'):
+        return True
+    # gamdl 3.8 structlog (ConsoleRenderer and legacy formats)
+    if re.search(r'\[(debug|info)\s*\]', lowered):
+        return True
+    if re.search(r'^\d{4}-\d{2}-\d{2}', stripped) and re.search(r'\[(debug|info)\s*\]', lowered):
+        return True
+    if stripped.startswith('{') and "'event'" in stripped and "'level'" in stripped:
+        return True
+    if ' action=' in lowered and ('success' in lowered or 'event=' in lowered):
+        return True
+    return False
+
 class QueueWriter(io.TextIOBase):
     def __init__(self, queue_instance, media_type=None, original_stream=None):
         self.queue = queue_instance
@@ -11186,6 +11243,8 @@ class QueueWriter(io.TextIOBase):
                     continue
                 is_debug_mode = current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False)
                 if not is_debug_mode and "[gamdl AppleMusicApi DEBUG]" in line:
+                    continue
+                if not is_debug_mode and _is_gamdl_verbose_log_line(line):
                     continue
                 import re
                 line = re.sub(r'(\d+/\d+\s+)\+(\s+)', r'\1✓\2', line)
@@ -11600,30 +11659,61 @@ def patch_download_file_for_cancellation():
                 """Patched version of _concurrent_download_tracks that respects cancellation"""
                 global _download_cancelled
                 should_indent_tracks = True
+                indent_prefix = "       " if should_indent_tracks else ""
+
+                def _emit_concurrent_track_progress(progress_queue, completion_counter, total_tasks, indent_prefix):
+                    """Drain and log any completed track results from the concurrent progress queue."""
+                    import queue as _queue_mod
+                    total_digits = len(str(total_tasks))
+                    while not progress_queue.empty():
+                        try:
+                            _index, track_name, status = progress_queue.get_nowait()
+                            completion_counter += 1
+                            if status == "SKIPPED":
+                                self.print(f'{indent_prefix}{completion_counter:0{total_digits}d}/{total_tasks} ▶ {track_name} |GRAY|(already exists)|RESET|', drop_level=1)
+                            elif status == "RATE_LIMITED":
+                                self.print(f'{indent_prefix}{completion_counter:0{total_digits}d}/{total_tasks} ⚠ {track_name} (rate limited)', drop_level=1)
+                            elif status is not None:
+                                error_msg = str(status)
+                                if "Could not get track info for" in error_msg:
+                                    error_reason = error_msg.split(":", 1)[1].strip() if ":" in error_msg else error_msg
+                                else:
+                                    error_reason = error_msg
+                                self.print(f'{indent_prefix}{completion_counter:0{total_digits}d}/{total_tasks} ❌ {track_name}: {error_reason} |GRAY|(failed)|RESET|', drop_level=1)
+                            else:
+                                self.print(f'{indent_prefix}{completion_counter:0{total_digits}d}/{total_tasks} ✓ {track_name}', drop_level=1)
+                        except _queue_mod.Empty:
+                            break
+                    return completion_counter
 
                 if concurrent_downloads <= 1:
                     self.print("Using sequential downloads (sync)")
                     results = []
-                    import random as _random
-                    import time as _time
-                    from utils.tidal_throttle import resolve_tidal_throttle
+                    from utils.tidal_throttle import resolve_tidal_throttle, TidalInterTrackGateSync
                     _tidal_cfg = resolve_tidal_throttle(
                         getattr(self, 'full_settings', None), getattr(self, 'service_name', None)
                     )
-                    for i, (track_info, args) in enumerate(zip(track_list, download_args_list)):
-                        if _download_cancelled:
-                            print(f"Download cancelled during sequential track {i+1}")
-                            break
-                        if i > 0 and _tidal_cfg:
-                            _time.sleep(_random.uniform(_tidal_cfg['delay_min'], _tidal_cfg['delay_max']))
-                        try:
-                            result = self.download_track(**args)
-                            results.append((i, result, None))
-                        except Exception as e:
-                            results.append((i, None, e))
-                        if _download_cancelled:
-                            print(f"Download cancelled after sequential track {i+1}")
-                            break
+                    _tidal_gate = TidalInterTrackGateSync() if _tidal_cfg else None
+                    self._active_tidal_gate = _tidal_gate
+                    self._active_tidal_cfg = _tidal_cfg
+                    try:
+                        for i, (track_info, args) in enumerate(zip(track_list, download_args_list)):
+                            if _download_cancelled:
+                                print(f"Download cancelled during sequential track {i+1}")
+                                break
+                            try:
+                                result = self.download_track(**args)
+                                results.append((i, result, None))
+                            except Exception as e:
+                                results.append((i, None, e))
+                            if _download_cancelled:
+                                print(f"Download cancelled after sequential track {i+1}")
+                                break
+                    finally:
+                        self._active_tidal_gate = None
+                        self._active_tidal_cfg = None
+                    if _download_cancelled:
+                        raise DownloadCancelledError("Download cancelled during sequential track download")
                     return results
                 from concurrent.futures import ThreadPoolExecutor, as_completed
                 import queue
@@ -11645,156 +11735,151 @@ def patch_download_file_for_cancellation():
                     if tidal_cfg and tidal_cfg.get('rpm', 0) > 0
                     else None
                 )
+                self._active_tidal_gate = tidal_gate
+                self._active_tidal_cfg = tidal_cfg
 
-                progress_queue = queue.Queue()
+                try:
+                    progress_queue = queue.Queue()
 
-                def download_worker(index, args):
-                    if _download_cancelled:
-                        return (index, None, Exception("Download cancelled"))
+                    def download_worker(index, args):
+                        if _download_cancelled:
+                            return (index, None, Exception("Download cancelled"))
 
-                    try:
-                        if tidal_gate and tidal_cfg:
-                            tidal_gate.wait_turn(tidal_cfg['delay_min'], tidal_cfg['delay_max'])
-                        track_id = args.get('track_id', 'Unknown')
-                        track_name = f"Track {track_id}"
-                        track_info_failed = False
-                        track_info_error = None
                         try:
-                            if _download_cancelled:
-                                return (index, None, Exception("Download cancelled"))
-                                
-                            from utils.models import QualityEnum, CodecOptions
-                            quality_tier = QualityEnum[self.global_settings['general']['download_quality'].upper()]
-                            codec_options = CodecOptions(
-                                spatial_codecs=self.global_settings['codecs']['spatial_codecs'],
-                                proprietary_codecs=self.global_settings['codecs']['proprietary_codecs'],
-                            )
-                            if tidal_rpm is not None:
-                                tidal_rpm.acquire()
-                            track_info = self.service.get_track_info(track_id, quality_tier, codec_options, **args.get('extra_kwargs', {}))
-                            if track_info and hasattr(track_info, 'name') and track_info.name:
-                                if hasattr(track_info, 'artists') and track_info.artists:
-                                    artists_str = ', '.join(track_info.artists)
-                                    track_name = f"{artists_str} - {track_info.name}"
-                                else:
-                                    track_name = track_info.name
-                        except Exception as e:
-                            track_info_failed = True
-                            track_info_error = e
-                        if track_info_failed:
-                            progress_queue.put((index, track_name, track_info_error))
-                            return (index, None, track_info_error)
-                        if _download_cancelled:
-                            return (index, None, Exception("Download cancelled"))
-                        if tidal_rpm is not None:
-                            tidal_rpm.acquire()
-                        result = self.download_track(**args, verbose=False)
-                        if _download_cancelled:
-                            return (index, None, Exception("Download cancelled"))
-                        if result == "SKIPPED":
-                            progress_queue.put((index, track_name, "SKIPPED"))
-                        elif result == "RATE_LIMITED":
-                            progress_queue.put((index, track_name, "RATE_LIMITED"))
-                        elif result is None:
-                            progress_queue.put((index, track_name, Exception("Download failed")))
-                        else:
-                            progress_queue.put((index, track_name, None))
-
-                        return (index, result, None)
-                    except Exception as e:
-                        error_track_name = track_name
-                        if error_track_name.startswith("Track "):
+                            track_id = args.get('track_id', 'Unknown')
+                            track_name = f"Track {track_id}"
+                            track_info_failed = False
+                            track_info_error = None
                             try:
+                                if _download_cancelled:
+                                    return (index, None, Exception("Download cancelled"))
+
                                 from utils.models import QualityEnum, CodecOptions
                                 quality_tier = QualityEnum[self.global_settings['general']['download_quality'].upper()]
                                 codec_options = CodecOptions(
                                     spatial_codecs=self.global_settings['codecs']['spatial_codecs'],
                                     proprietary_codecs=self.global_settings['codecs']['proprietary_codecs'],
                                 )
+                                if tidal_rpm is not None:
+                                    tidal_rpm.acquire()
                                 track_info = self.service.get_track_info(track_id, quality_tier, codec_options, **args.get('extra_kwargs', {}))
                                 if track_info and hasattr(track_info, 'name') and track_info.name:
                                     if hasattr(track_info, 'artists') and track_info.artists:
                                         artists_str = ', '.join(track_info.artists)
-                                        error_track_name = f"{artists_str} - {track_info.name}"
+                                        track_name = f"{artists_str} - {track_info.name}"
                                     else:
-                                        error_track_name = track_info.name
-                            except Exception:
-                                pass
+                                        track_name = track_info.name
+                            except Exception as e:
+                                track_info_failed = True
+                                track_info_error = e
+                            if track_info_failed:
+                                progress_queue.put((index, track_name, track_info_error))
+                                return (index, None, track_info_error)
+                            if _download_cancelled:
+                                return (index, None, Exception("Download cancelled"))
+                            if tidal_rpm is not None:
+                                tidal_rpm.acquire()
+                            result = self.download_track(**args, verbose=False)
+                            if _download_cancelled:
+                                return (index, None, Exception("Download cancelled"))
+                            if result == "SKIPPED":
+                                progress_queue.put((index, track_name, "SKIPPED"))
+                            elif result == "RATE_LIMITED":
+                                progress_queue.put((index, track_name, "RATE_LIMITED"))
+                            elif result is None:
+                                progress_queue.put((index, track_name, Exception("Download failed")))
+                            else:
+                                progress_queue.put((index, track_name, None))
 
-                        progress_queue.put((index, error_track_name, e))
-                        return (index, None, e)
-                results = []
-                completion_counter = 0
-                with ThreadPoolExecutor(max_workers=concurrent_downloads) as executor:
-                    future_to_index = {}
-                    for i, args in enumerate(download_args_list):
-                        if _download_cancelled:
-                            print(f"Download cancelled before submitting task {i+1}")
-                            break
-                        future = executor.submit(download_worker, i, args)
-                        future_to_index[future] = i
-                    completed_count = 0
-                    total_tasks = len(future_to_index)
-
-                    for future in as_completed(future_to_index):
-                        if _download_cancelled:
-                            for remaining_future in future_to_index:
-                                if not remaining_future.done():
-                                    remaining_future.cancel()
-                            executor.shutdown(wait=False)
-                            break
-
-                        try:
-                            result = future.result()
-                            results.append(result)
-                            completed_count += 1
-                            while not progress_queue.empty():
-                                try:
-                                    index, track_name, status = progress_queue.get_nowait()
-                                    completion_counter += 1
-                                    total_digits = len(str(total_tasks))
-                                    indent_prefix = "       " if should_indent_tracks else ""
-                                    
-                                    if status == "SKIPPED":
-                                        self.print(f'{indent_prefix}{completion_counter:0{total_digits}d}/{total_tasks} ▶ {track_name} |GRAY|(already exists)|RESET|', drop_level=1)
-                                    elif status == "RATE_LIMITED":
-                                        self.print(f'{indent_prefix}{completion_counter:0{total_digits}d}/{total_tasks} ⚠ {track_name} (rate limited)', drop_level=1)
-                                    elif status is not None:
-                                        error_msg = str(status)
-                                        if "Could not get track info for" in error_msg:
-                                            if ":" in error_msg:
-                                                error_reason = error_msg.split(":", 1)[1].strip()
-                                            else:
-                                                error_reason = error_msg
-                                        else:
-                                            error_reason = error_msg
-
-                                        self.print(f'{indent_prefix}{completion_counter:0{total_digits}d}/{total_tasks} ❌ {track_name}: {error_reason} |GRAY|(failed)|RESET|', drop_level=1)
-                                    else:
-                                        self.print(f'{indent_prefix}{completion_counter:0{total_digits}d}/{total_tasks} ✓ {track_name}', drop_level=1)
-                                except queue.Empty:
-                                    break
+                            return (index, result, None)
                         except Exception as e:
-                            index = future_to_index[future]
-                            results.append((index, None, e))
-                actual_downloaded = sum(1 for r in results if r and r[2] is None and r[1] is not None and r[1] not in ["RATE_LIMITED", "SKIPPED"])
-                actual_already_existed = sum(1 for r in results if r and r[2] is None and r[1] == "SKIPPED")
-                actual_failed = sum(1 for r in results if r and (r[2] is not None or (r[1] == "RATE_LIMITED")))
-                from utils.models import Oprinter
+                            error_track_name = track_name
+                            if error_track_name.startswith("Track "):
+                                try:
+                                    from utils.models import QualityEnum, CodecOptions
+                                    quality_tier = QualityEnum[self.global_settings['general']['download_quality'].upper()]
+                                    codec_options = CodecOptions(
+                                        spatial_codecs=self.global_settings['codecs']['spatial_codecs'],
+                                        proprietary_codecs=self.global_settings['codecs']['proprietary_codecs'],
+                                    )
+                                    track_info = self.service.get_track_info(track_id, quality_tier, codec_options, **args.get('extra_kwargs', {}))
+                                    if track_info and hasattr(track_info, 'name') and track_info.name:
+                                        if hasattr(track_info, 'artists') and track_info.artists:
+                                            artists_str = ', '.join(track_info.artists)
+                                            error_track_name = f"{artists_str} - {track_info.name}"
+                                        else:
+                                            error_track_name = track_info.name
+                                except Exception:
+                                    pass
 
-                if actual_failed > 0:
-                    if actual_downloaded > 0 and actual_already_existed > 0:
-                        Oprinter._original_oprint(self.oprinter, f"All {len(results)} tracks available! ({actual_downloaded} downloaded, {actual_already_existed} already existed, {actual_failed} failed)", drop_level=performance_summary_indent)
-                    elif actual_downloaded > 0:
-                        Oprinter._original_oprint(self.oprinter, f"{actual_downloaded + actual_failed} tracks processed! ({actual_downloaded} downloaded, {actual_failed} failed)", drop_level=performance_summary_indent)
-                    elif actual_already_existed > 0:
-                        Oprinter._original_oprint(self.oprinter, f"{actual_already_existed + actual_failed} tracks processed! ({actual_already_existed} already existed, {actual_failed} failed)", drop_level=performance_summary_indent)
-                    else:
-                        Oprinter._original_oprint(self.oprinter, f"{actual_failed} tracks failed.", drop_level=performance_summary_indent)
-                else:
-                    pass
+                            progress_queue.put((index, error_track_name, e))
+                            return (index, None, e)
 
-                return results
+                    results = []
+                    completion_counter = 0
+                    cancelled_during_pool = False
+                    with ThreadPoolExecutor(max_workers=concurrent_downloads) as executor:
+                        future_to_index = {}
+                        for i, args in enumerate(download_args_list):
+                            if _download_cancelled:
+                                print(f"Download cancelled before submitting task {i+1}")
+                                cancelled_during_pool = True
+                                break
+                            future = executor.submit(download_worker, i, args)
+                            future_to_index[future] = i
+                        completed_count = 0
+                        total_tasks = len(future_to_index)
+
+                        for future in as_completed(future_to_index):
+                            if _download_cancelled:
+                                completion_counter = _emit_concurrent_track_progress(
+                                    progress_queue, completion_counter, total_tasks, indent_prefix
+                                )
+                                for remaining_future in future_to_index:
+                                    if not remaining_future.done():
+                                        remaining_future.cancel()
+                                executor.shutdown(wait=False)
+                                cancelled_during_pool = True
+                                break
+
+                            try:
+                                result = future.result()
+                                results.append(result)
+                                completed_count += 1
+                                completion_counter = _emit_concurrent_track_progress(
+                                    progress_queue, completion_counter, total_tasks, indent_prefix
+                                )
+                            except Exception as e:
+                                index = future_to_index[future]
+                                results.append((index, None, e))
+                                completion_counter = _emit_concurrent_track_progress(
+                                    progress_queue, completion_counter, total_tasks, indent_prefix
+                                )
+
+                    completion_counter = _emit_concurrent_track_progress(
+                        progress_queue, completion_counter, total_tasks, indent_prefix
+                    )
+                    if cancelled_during_pool or _download_cancelled:
+                        raise DownloadCancelledError("Download cancelled during concurrent track download")
+                    actual_downloaded = sum(1 for r in results if r and r[2] is None and r[1] is not None and r[1] not in ["RATE_LIMITED", "SKIPPED"])
+                    actual_already_existed = sum(1 for r in results if r and r[2] is None and r[1] == "SKIPPED")
+                    actual_failed = sum(1 for r in results if r and (r[2] is not None or (r[1] == "RATE_LIMITED")))
+                    from utils.models import Oprinter
+
+                    if actual_failed > 0:
+                        if actual_downloaded > 0 and actual_already_existed > 0:
+                            Oprinter._original_oprint(self.oprinter, f"All {len(results)} tracks available! ({actual_downloaded} downloaded, {actual_already_existed} already existed, {actual_failed} failed)", drop_level=performance_summary_indent)
+                        elif actual_downloaded > 0:
+                            Oprinter._original_oprint(self.oprinter, f"{actual_downloaded + actual_failed} tracks processed! ({actual_downloaded} downloaded, {actual_failed} failed)", drop_level=performance_summary_indent)
+                        elif actual_already_existed > 0:
+                            Oprinter._original_oprint(self.oprinter, f"{actual_already_existed + actual_failed} tracks processed! ({actual_already_existed} already existed, {actual_failed} failed)", drop_level=performance_summary_indent)
+                        else:
+                            Oprinter._original_oprint(self.oprinter, f"{actual_failed} tracks failed.", drop_level=performance_summary_indent)
+
+                    return results
+                finally:
+                    self._active_tidal_gate = None
+                    self._active_tidal_cfg = None
             Downloader._concurrent_download_tracks = cancellable_concurrent_download_tracks
             print("[Patch] Applied cancellable concurrent download patch.")
             try:
@@ -11894,23 +11979,10 @@ def patch_download_file_for_cancellation():
 
                         def status_aware_print(message, drop_level=0):
                             message_str = str(message)
-                            if "completed ===" in message_str and _download_cancelled:
-                                if "=== Artist" in message_str:
-                                    artist_name = message_str.split("=== Artist ")[1].split(" completed ===")[0] if "=== Artist " in message_str else "Unknown"
-                                    original_print(f"=== ❌ Artist {artist_name} cancelled ===", drop_level=drop_level)
-                                    original_print("", drop_level=drop_level)
-                                elif "=== Album" in message_str:
-                                    album_name = message_str.split("=== Album ")[1].split(" completed ===")[0] if "=== Album " in message_str else "Unknown"
-                                    original_print(f"=== ❌ Album {album_name} cancelled ===", drop_level=drop_level)
-                                    original_print("", drop_level=drop_level)
-                                elif "=== Playlist" in message_str:
-                                    playlist_name = message_str.split("=== Playlist ")[1].split(" completed ===")[0] if "=== Playlist " in message_str else "Unknown"
-                                    original_print(f"=== ❌ Playlist {playlist_name} cancelled ===", drop_level=drop_level)
-                                    original_print("", drop_level=drop_level)
-                                elif "=== Track" in message_str:
-                                    track_info = message_str.split("=== Track ")[1].split(" completed ===")[0] if "=== Track " in message_str else "Unknown"
-                                    original_print(f"=== ❌ Track {track_info} cancelled ===", drop_level=drop_level)
-                                    original_print("", drop_level=drop_level)
+                            cancelled_msg = _cancelled_completion_replacement(message_str)
+                            if cancelled_msg:
+                                original_print(cancelled_msg, drop_level=drop_level)
+                                original_print("", drop_level=drop_level)
                             else:
                                 original_print(message, drop_level=drop_level)
                         self.print = status_aware_print
@@ -11936,11 +12008,10 @@ def patch_download_file_for_cancellation():
 
                         def track_status_aware_print(message, drop_level=0):
                             message_str = str(message)
-                            if "completed ===" in message_str and _download_cancelled:
-                                if "=== Track" in message_str:
-                                    track_info = message_str.split("=== Track ")[1].split(" completed ===")[0] if "=== Track " in message_str else "Unknown"
-                                    original_print(f"=== ❌ Track {track_info} cancelled ===", drop_level=drop_level)
-                                    original_print("", drop_level=drop_level)
+                            cancelled_msg = _cancelled_completion_replacement(message_str)
+                            if cancelled_msg:
+                                original_print(cancelled_msg, drop_level=drop_level)
+                                original_print("", drop_level=drop_level)
                             else:
                                 original_print(message, drop_level=drop_level)
 
@@ -11962,17 +12033,18 @@ def patch_download_file_for_cancellation():
 
                         def album_status_aware_print(message, drop_level=0):
                             message_str = str(message)
-                            if "completed ===" in message_str and _download_cancelled:
-                                if "=== Album" in message_str:
-                                    album_name = message_str.split("=== Album ")[1].split(" completed ===")[0] if "=== Album " in message_str else "Unknown"
-                                    original_print(f"=== ❌ Album {album_name} cancelled ===", drop_level=drop_level)
-                                    original_print("", drop_level=drop_level)
+                            cancelled_msg = _cancelled_completion_replacement(message_str)
+                            if cancelled_msg:
+                                original_print(cancelled_msg, drop_level=drop_level)
+                                original_print("", drop_level=drop_level)
                             else:
                                 original_print(message, drop_level=drop_level)
 
                         self.print = album_status_aware_print
                         try:
                             result = Downloader._original_download_album(self, album_id, **kwargs)
+                            if _download_cancelled:
+                                raise DownloadCancelledError("Download cancelled during album download")
                             return result
                         finally:
                             self.print = original_print
@@ -11989,11 +12061,10 @@ def patch_download_file_for_cancellation():
 
                         def playlist_status_aware_print(message, drop_level=0):
                             message_str = str(message)
-                            if "completed ===" in message_str and _download_cancelled:
-                                if "=== Playlist" in message_str:
-                                    playlist_name = message_str.split("=== Playlist ")[1].split(" completed ===")[0] if "=== Playlist " in message_str else "Unknown"
-                                    original_print(f"=== ❌ Playlist {playlist_name} cancelled ===", drop_level=drop_level)
-                                    original_print("", drop_level=drop_level)
+                            cancelled_msg = _cancelled_completion_replacement(message_str)
+                            if cancelled_msg:
+                                original_print(cancelled_msg, drop_level=drop_level)
+                                original_print("", drop_level=drop_level)
                             else:
                                 original_print(message, drop_level=drop_level)
 
@@ -12789,7 +12860,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
 def _start_single_download(url_to_download, output_path_final, search_result_data=None):
     """Starts the download in a separate thread for a single URL."""
     global download_process_active, current_settings, orpheus_instance, stop_event
-    global spotify_pre_download_warning_acknowledged
+    global spotify_pre_download_warning_acknowledged, _active_download_thread
 
     try:
         from utils.utils import resolve_platform_share_url
@@ -12813,6 +12884,9 @@ def _start_single_download(url_to_download, output_path_final, search_result_dat
     
     if download_process_active:
         print(f"Skipping start for {url_to_download}: A download is currently active.")
+        return False
+
+    if not _wait_for_active_download_thread_to_stop():
         return False
     
     try:
@@ -12950,6 +13024,7 @@ def _start_single_download(url_to_download, output_path_final, search_result_dat
             args=(orpheus_instance, url_to_download, output_path_final, current_settings, search_result_data),
             daemon=True
         )
+        _active_download_thread = download_thread
         print(f"Starting download thread for: {url_to_download}")
         download_thread.start()
         if platform.system() == "Windows":
@@ -14976,31 +15051,18 @@ def show_search_context_menu(event):
             # Use the first selected item's platform
             platform_name = selected_items[0].get('platform', '').lower()
             if platform_name in ('applemusic', 'apple music'):
-                # Check GUI first (authoritative for current session)
-                use_wrapper = None
-                if 'settings_vars' in globals() and 'credentials' in settings_vars:
-                    am_settings = settings_vars['credentials'].get('Apple Music', {})
-                    if 'use_wrapper' in am_settings:
-                        val = am_settings['use_wrapper'].get()
-                        # CTkVariables .get() can return various types; ensure boolean
-                        use_wrapper = bool(val) if not isinstance(val, str) else val.lower() == 'true'
-                
-                # If not in GUI Vars or not found, check current_settings
-                if use_wrapper is None and 'current_settings' in globals():
-                    use_wrapper = current_settings.get('credentials', {}).get('Apple Music', {}).get('use_wrapper', False)
-                
-                # Default to False if still unknown
-                if use_wrapper is None: use_wrapper = False
-                
-                if use_wrapper:
-                    for item in selected_items:
-                        addl = str(item.get('additional', ''))
-                        if 'atmos' in addl.lower() or '◗◖' in addl:
-                            has_atmos = True
-                        if 'hi res lossless' in addl.lower() or '🅷' in addl or 'ʜɪ-ʀᴇs' in addl or 'hi-res' in addl.lower():
-                            has_hires = True
-                            has_alac = True # Hi-Res implies ALAC
-                        if 'aac only' not in addl.lower() and 'ᴀᴀᴄ only' not in addl and 'ᴀᴀᴄ' not in addl and 'aac' not in addl.lower():
+                # gamdl 3.8: Atmos/AAC use Widevine+CDM without wrapper; ALAC can be attempted without wrapper too.
+                for item in selected_items:
+                    addl = str(item.get('additional', ''))
+                    if 'atmos' in addl.lower() or '◗◖' in addl:
+                        has_atmos = True
+                    if 'hi res lossless' in addl.lower() or '🅷' in addl or 'ʜɪ-ʀᴇs' in addl or 'hi-res' in addl.lower():
+                        has_hires = True
+                        has_alac = True  # Hi-Res implies ALAC
+                    if 'lossless' in addl.lower() and 'aac only' not in addl.lower():
+                        has_alac = True
+                    elif 'aac only' not in addl.lower() and 'ᴀᴀᴄ only' not in addl and 'ᴀᴀᴄ only' not in addl.lower():
+                        if 'ᴀᴀᴄ' not in addl and 'aac' not in addl.lower():
                             has_alac = True
             elif platform_name == 'tidal':
                 # Check for Atmos/Hi-Res support in Tidal results
@@ -15325,12 +15387,21 @@ def show_search_context_menu(event):
                     # Hide unused buttons (e.g. 4th button if config has fewer items)
                     btn.pack_forget()
         
-        # For SoundCloud/Apple Music: show "No other formats available" below the quality button
+        # For SoundCloud/Apple Music: show format count when only one quality tier is available
         if _search_context_menu_bottom_label and _search_context_menu_bottom_label.winfo_exists():
             if platform_name.lower() == 'soundcloud':
+                _search_context_menu_bottom_label.configure(text="  1 format available")
                 _search_context_menu_bottom_label.pack(side="bottom", pady=(2, 4), padx=6, anchor="w")
-            elif platform_name.lower() in ('applemusic', 'apple music') and not use_wrapper:
-                _search_context_menu_bottom_label.pack(side="bottom", pady=(2, 4), padx=6, anchor="w")
+            elif platform_name.lower() in ('applemusic', 'apple music'):
+                visible_count = len(visible_indices)
+                if visible_count <= 1:
+                    suffix = "" if visible_count == 1 else "s"
+                    _search_context_menu_bottom_label.configure(
+                        text=f"  {max(visible_count, 1)} format{suffix} available"
+                    )
+                    _search_context_menu_bottom_label.pack(side="bottom", pady=(2, 4), padx=6, anchor="w")
+                else:
+                    _search_context_menu_bottom_label.pack_forget()
             else:
                 _search_context_menu_bottom_label.pack_forget()
         
@@ -16837,6 +16908,8 @@ def _create_credential_tab_content(platform_name, tab_frame):
             'max_track_quality_to_use': 'Max track quality',
             'quality_format': 'Quality display format',
             'country': 'Country',
+            'use_wrapper': 'Use Wrapper',
+            'wrapper_decrypt_ip': 'Wrapper URL',
         }
 
         if platform_name == "Spotify":
@@ -17447,8 +17520,8 @@ def _create_credential_tab_content(platform_name, tab_frame):
                 widget.grid(row=i, column=1, sticky="w", padx=10, pady=pady_config)
                 
                 if key == "use_wrapper":
-                    CTkToolTip(widget, message="Enable this, if you are running an external decryption server\nto download Dolby Atmos / ALAC.", bg_color=TOOLTIP_MENU_BG, text_color=WHITE_TEXT_COLOR, padx=12, pady=12)
-                    CTkToolTip(label, message="Enable this, if you are running an external decryption server\nto download Dolby Atmos / ALAC.", bg_color=TOOLTIP_MENU_BG, text_color=WHITE_TEXT_COLOR, padx=12, pady=12)
+                    CTkToolTip(widget, message="Enable when running wrapper-v2 for ALAC (lossless) downloads.\nAAC and Dolby Atmos do not require the wrapper.", bg_color=TOOLTIP_MENU_BG, text_color=WHITE_TEXT_COLOR, padx=12, pady=12)
+                    CTkToolTip(label, message="Enable when running wrapper-v2 for ALAC (lossless) downloads.\nAAC and Dolby Atmos do not require the wrapper.", bg_color=TOOLTIP_MENU_BG, text_color=WHITE_TEXT_COLOR, padx=12, pady=12)
 
 
             elif (platform_name == "YouTube" or platform_name == "Apple Music") and key == "cookies_path":
@@ -17613,7 +17686,7 @@ def _create_credential_tab_content(platform_name, tab_frame):
                 if platform_name == "Apple Music":
                     _am_tooltip_texts = {
                         "language": "Language/locale for Apple Music requests (for example: en-US).",
-                        "wrapper_decrypt_ip": "IP:port of your external wrapper decrypt server used with Wrapper mode (for Atmos/ALAC).",
+                        "wrapper_decrypt_ip": "Base URL of wrapper-v2 (default: 127.0.0.1 on port 80). Do not use port 18080 — that is internal to the container.",
                     }
                     _am_tip = _am_tooltip_texts.get(key)
                     if _am_tip:
@@ -17896,7 +17969,7 @@ def _create_credential_tab_content(platform_name, tab_frame):
 
             title_label_wrapper = customtkinter.CTkLabel(
                 wrapper_title_row,
-                text="How to set up wrapper",
+                text="How to set up wrapper-v2",
                 font=("Segoe UI", 16, "bold"),
                 text_color=WHITE_TEXT_COLOR,
             )
@@ -17904,42 +17977,103 @@ def _create_credential_tab_content(platform_name, tab_frame):
 
             optional_label = customtkinter.CTkLabel(
                 right_header,
-                text="(Optional: to download Dolby Atmos / ALAC)",
+                text="(Optional: required for ALAC lossless)",
                 font=("Segoe UI", 12),
                 text_color=WHITE_TEXT_COLOR,
             )
             optional_label.pack(anchor="w", padx=(_setup_header_title_indent(), 0), pady=(2, 0))
             
-            # See demo button for "How to set up wrapper"
-            wrapper_demo_urls = {
-                "Windows": "https://youtu.be/lrlsLD3aHM8",
-                "Darwin": "https://youtu.be/5mOK4zxKJb8",
-                "Linux": "https://youtu.be/wCEiGXEyAEs"
-            }
-            current_os = platform.system()
-            wrapper_url = wrapper_demo_urls.get(current_os, "https://youtu.be/wCEiGXEyAEs")
-            
+            wrapper_repo_url = "https://github.com/glomatico/wrapper-v2"
+            wrapper_readme_url = "https://github.com/glomatico/wrapper-v2#building"
+
             wrapper_demo_btn = customtkinter.CTkButton(
                 help_frame,
-                text="See demo",
+                text="Open guide",
                 width=80,
                 height=26,
                 font=("Segoe UI", 11),
                 fg_color=BUTTON_COLOR,
                 hover_color=LINK_COLOR,
-                command=lambda u=wrapper_url: _open_url(u)
+                command=lambda: _open_url(wrapper_repo_url)
             )
-            # Position at the far right (where the global button used to be)
             wrapper_demo_btn.place(relx=1.0, y=20, anchor="ne", x=-15)
 
-            # Description text - aligned with title text
-            desc_label = customtkinter.CTkLabel(
-                right_col, 
-                text="See demo / description below the video", 
-                font=("Segoe UI", 12), 
-                text_color=GRAY_TEXT_COLOR
-            )
-            desc_label.pack(anchor="w", padx=(_setup_header_title_indent(), 0), pady=(15, 0))
+            def _pack_wrapper_step(parent, step_num, builder):
+                frame = customtkinter.CTkFrame(parent, fg_color="transparent")
+                frame.pack(anchor="w", pady=(4, 0))
+                customtkinter.CTkLabel(
+                    frame, text=f"{step_num}.", font=("Segoe UI", 12, "bold"),
+                    text_color=WHITE_TEXT_COLOR, width=35,
+                ).pack(side="left", anchor="n")
+                content = customtkinter.CTkFrame(frame, fg_color="transparent")
+                content.pack(side="left", anchor="w")
+                builder(content)
+                return frame
+
+            def _add_setup_link(parent, text, url):
+                link = customtkinter.CTkLabel(
+                    parent, text=text, font=("Segoe UI", 12, "underline"),
+                    text_color=LINK_COLOR, cursor=HAND_CURSOR_LINK,
+                )
+                link.pack(side="left")
+                link.bind("<Button-1>", lambda e, u=url: _open_url(u))
+                link.bind("<Enter>", lambda e, w=link: w.configure(text_color=LINK_HOVER_COLOR))
+                link.bind("<Leave>", lambda e, w=link: w.configure(text_color=LINK_COLOR))
+                return link
+
+            _pack_wrapper_step(right_col, 1, lambda row: (
+                customtkinter.CTkLabel(row, text="Install ", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left"),
+                _add_setup_link(row, "Docker Desktop", "https://www.docker.com/products/docker-desktop/"),
+            ))
+
+            _pack_wrapper_step(right_col, 2, lambda row: (
+                customtkinter.CTkLabel(row, text="Clone ", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left"),
+                _add_setup_link(row, "wrapper-v2", wrapper_repo_url),
+                customtkinter.CTkLabel(row, text=" and stage Apple Music Android libs", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left"),
+            ))
+
+            step3_note = customtkinter.CTkFrame(right_col, fg_color="transparent")
+            step3_note.pack(anchor="w", padx=(_setup_header_title_indent(), 0), pady=(0, 2))
+            customtkinter.CTkLabel(
+                step3_note,
+                text="(see wrapper-v2 README — Apple Music APK required)",
+                font=("Segoe UI", 12, "italic"),
+                text_color=GRAY_TEXT_COLOR,
+            ).pack(side="left")
+            _add_setup_link(step3_note, " Setup guide", wrapper_readme_url)
+
+            _pack_wrapper_step(right_col, 3, lambda row: customtkinter.CTkLabel(
+                row,
+                text="In the wrapper-v2 folder, run: docker compose up --build",
+                font=("Segoe UI", 12),
+                text_color=GRAY_TEXT_COLOR,
+            ).pack(side="left", anchor="w"))
+
+            _pack_wrapper_step(right_col, 4, lambda row: customtkinter.CTkLabel(
+                row,
+                text="Sign in to the wrapper (first time): POST /login with your Apple ID, or set WRAPPER_USERNAME + WRAPPER_PASSWORD in Docker.",
+                font=("Segoe UI", 12),
+                text_color=GRAY_TEXT_COLOR,
+                wraplength=360,
+                justify="left",
+            ).pack(side="left", anchor="w"))
+
+            _pack_wrapper_step(right_col, 5, lambda row: (
+                customtkinter.CTkLabel(row, text="Enable ", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left"),
+                customtkinter.CTkLabel(row, text="Use Wrapper", font=("Segoe UI", 12, "italic"), text_color=GRAY_TEXT_COLOR).pack(side="left"),
+                customtkinter.CTkLabel(row, text=" above, Wrapper URL ", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left"),
+                customtkinter.CTkLabel(row, text="127.0.0.1", font=("Segoe UI", 12, "italic"), text_color=GRAY_TEXT_COLOR).pack(side="left"),
+                customtkinter.CTkLabel(row, text=", then Save.", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left"),
+            ))
+
+            customtkinter.CTkLabel(
+                right_col,
+                text="Keep Docker and the wrapper container running while downloading ALAC.",
+                font=("Segoe UI", 12),
+                text_color=GRAY_TEXT_COLOR,
+                wraplength=360,
+                justify="left",
+            ).pack(anchor="w", padx=(_setup_header_title_indent(), 0), pady=(10, 0))
             
             _add_clear_session_icon(help_frame, "Apple Music")
         
@@ -19492,7 +19626,7 @@ if __name__ == "__main__":
                 }
             },
             "credentials": {
-                "Apple Music": { "cookies_path": "./config/cookies.txt", "language": "en-US", "use_wrapper": False, "wrapper_decrypt_ip": "127.0.0.1:10020" },
+                "Apple Music": { "cookies_path": "./config/cookies.txt", "language": "en-US", "use_wrapper": False, "wrapper_decrypt_ip": "127.0.0.1" },
                 "Beatport": { "username": "", "password": "" },
                 "Beatsource": { "username": "", "password": "" },
                 "Bugs": { "username": "", "password": "" },
