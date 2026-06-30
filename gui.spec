@@ -20,6 +20,10 @@ print(f"[PyInstaller] Collected ffmpeg submodules: {ffmpeg_hiddenimports}")
 dc_datas, dc_binaries, dc_hiddenimports = collect_all('dataclass-click')
 iq_datas, iq_binaries, iq_hiddenimports = collect_all('inquirerpy')
 _tkdnd_datas, _tkdnd_binaries, _tkdnd_hiddenimports = collect_all('tkinterdnd2')
+structlog_datas, structlog_binaries, structlog_hiddenimports = collect_all('structlog')
+httpx_retries_datas, httpx_retries_binaries, httpx_retries_hiddenimports = collect_all('httpx_retries')
+print(f"[PyInstaller] Collected structlog hiddenimports: {len(structlog_hiddenimports)}")
+print(f"[PyInstaller] Collected httpx_retries hiddenimports: {len(httpx_retries_hiddenimports)}")
 
 # Collect additional data files based on what exists in the source directory
 additional_datas = [
@@ -174,9 +178,9 @@ else:
 
 a = Analysis(
     ['gui.py'],
-    pathex=['.', os.path.join(SPEC_DIR, 'vendor', 'librespot')],
-    binaries=additional_binaries + ffmpeg_binaries + dc_binaries + iq_binaries + _tkdnd_binaries,
-    datas=additional_datas + ffmpeg_datas + dc_datas + iq_datas + _tkdnd_datas,
+    pathex=['.', os.path.join(SPEC_DIR, 'vendor', 'librespot'), os.path.join(SPEC_DIR, 'modules', 'applemusic', 'gamdl')],
+    binaries=additional_binaries + ffmpeg_binaries + dc_binaries + iq_binaries + _tkdnd_binaries + structlog_binaries + httpx_retries_binaries,
+    datas=additional_datas + ffmpeg_datas + dc_datas + iq_datas + _tkdnd_datas + structlog_datas + httpx_retries_datas,
     hiddenimports=[
         'certifi',
         'colorama',
@@ -217,6 +221,8 @@ a = Analysis(
         'aiohttp',
         'aiofiles',
         'httpx',
+        'httpx_retries',
+        'structlog',
         'async_lru',
         'pywinstyles',
         'tkinterdnd2',
@@ -237,7 +243,8 @@ a = Analysis(
         'zeroconf',                 # Dependency for librespot
         'ifaddr',                   # Dependency for zeroconf
         'pyogg',                    # Dependency for librespot
-    ] + ffmpeg_hiddenimports + dc_hiddenimports + iq_hiddenimports + _tkdnd_hiddenimports + _librespot_hiddenimports + _librespot_player_hi,
+        'modules.applemusic.interface',
+    ] + ffmpeg_hiddenimports + dc_hiddenimports + iq_hiddenimports + _tkdnd_hiddenimports + structlog_hiddenimports + httpx_retries_hiddenimports + _librespot_hiddenimports + _librespot_player_hi,
     excludes=['torch', 'cuda', 'pytorch', 'matplotlib', 'pandas', 'numpy'],
     hookspath=['.'],
     hooksconfig={},
