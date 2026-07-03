@@ -60,14 +60,11 @@ else:
 if application_path not in sys.path:
     sys.path.insert(0, application_path)
 
-gamdl_parent_path = os.path.join(application_path, 'modules', 'applemusic', 'gamdl')
-if os.path.isdir(gamdl_parent_path) and gamdl_parent_path not in sys.path:
-    sys.path.insert(0, gamdl_parent_path)
-
 os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
 
-from utils.vendor_bootstrap import bootstrap_vendor_paths
+from utils.vendor_bootstrap import bootstrap_vendor_paths, insert_gamdl_sys_path
 bootstrap_vendor_paths()
+insert_gamdl_sys_path(os.path.join(application_path, 'modules', 'applemusic'))
 
 from utils.utils import (
     find_system_ffmpeg,

@@ -212,6 +212,7 @@ a = Analysis(
         'tqdm',
         'urllib3',
         'utils.utils',
+        'utils.vendor_bootstrap',
         'uuid',
         'wave',
         'webbrowser',
