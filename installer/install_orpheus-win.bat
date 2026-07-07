@@ -56,7 +56,8 @@ rmdir /S /Q temp_gui
 pip install -r requirements-gui.txt
 
 echo [7/10] Downloading and extracting Deno...
-curl -L -o deno.zip https://github.com/denoland/deno/releases/download/v2.8.0/deno-x86_64-pc-windows-msvc.zip
+curl -L -o deno.zip https://github.com/denoland/deno/releases/download/v2.8.1/deno-x86_64-pc-windows-msvc.zip
+
 tar -xf deno.zip
 del deno.zip
 
