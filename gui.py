@@ -19815,7 +19815,7 @@ if __name__ == "__main__":
                 "module_defaults": { "lyrics": "default", "covers": "default", "credits": "default" },
                 "lyrics": { "embed_lyrics": True, "embed_synced_lyrics": False, "save_synced_lyrics": True },
                 "covers": { "embed_cover": True, "main_compression": "high", "main_resolution": 1400, "save_original_cover_size": False, "save_external": False, "external_format": "png", "external_compression": "low", "external_resolution": 3000, "save_animated_cover": True },
-                "playlist": { "save_m3u": True, "paths_m3u": "absolute", "extended_m3u": True },
+                "playlist": { "save_m3u": True, "paths_m3u": "absolute", "extended_m3u": True, "group_by_album": False },
                 "advanced": {
                     "advanced_login_system": False,
                     "codec_conversions": { "alac": "flac", "wav": "flac", "vorbis": "vorbis" }, 
@@ -20820,6 +20820,7 @@ if __name__ == "__main__":
             "playlist.save_m3u": "Create an M3U playlist file for playlist downloads.",
             "playlist.paths_m3u": "Select 'relative' or 'absolute' paths in M3U file.",
             "playlist.extended_m3u": "Include extended info like track length in M3U file.",
+            "playlist.group_by_album": "When downloading playlists, put each track in an Artist - Album subfolder inside the playlist folder.\nExample: My Playlist/Artist - Album/01. Track.flac\nKeeps large multi-artist playlists organized without dumping every file in one folder.",
             "advanced.advanced_login_system": "Enable advanced login system (Use only if instructed by module documentation).",
             "advanced.ffmpeg_path": "Full path to the ffmpeg executable \nIf set to just 'ffmpeg', it's assumed to be in the system PATH.\nThis is used for codec conversions.",
             "advanced.codec_conversions": "Defines automatic codec remapping before save (for example: alac -> flac).\nLeft dropdown = source codec from module, right dropdown = target codec to convert to.",
