@@ -3,3 +3,5 @@ customtkinter
 tkinterdnd2
 packaging
 pywinstyles
+pystray
+six

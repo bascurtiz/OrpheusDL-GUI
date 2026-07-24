@@ -1738,6 +1738,7 @@ def setup_logging(log_queue):
 __version__ = "2.0.3"
 from update_checker import run_check_in_thread
 _mutex_handle = None
+_tray_icon = None  # pystray.Icon while minimized to the system tray
 if platform.system() == "Windows":
     try:
         import winsound
@@ -8278,6 +8279,7 @@ def load_settings():
                 if "play_sound_on_finish" in orpheus_general: settings["globals"]["general"]["play_sound_on_finish"] = orpheus_general["play_sound_on_finish"]
                 if "disabled_search_platforms" in orpheus_general: settings["globals"]["general"]["disabled_search_platforms"] = orpheus_general["disabled_search_platforms"]
                 if "min_file_size_kb" in orpheus_general: settings["globals"]["general"]["min_file_size_kb"] = orpheus_general["min_file_size_kb"]
+                if "minimize_to_tray" in orpheus_general: settings["globals"]["general"]["minimize_to_tray"] = bool(orpheus_general["minimize_to_tray"])
             for section_key, section_data in orpheus_global_from_file.items():
                  if section_key != "general" and section_key in settings["globals"]:
                      if isinstance(section_data, dict) and isinstance(settings["globals"].get(section_key), dict):
@@ -8714,7 +8716,7 @@ def save_settings(show_confirmation: bool = True):
          return False
     mapped_orpheus_updates = { "global": {"general": {},"formatting": {},"codecs": {},"covers": {},"playlist": {},"advanced": {},"module_defaults": {},"artist_downloading": {},"lyrics": {}}, "modules": {} }
     gui_globals = updated_gui_settings.get("globals", {})
-    general_map_gui_to_orpheus = { "output_path": "download_path", "quality": "download_quality", "search_limit": "search_limit", "disabled_search_platforms": "disabled_search_platforms", "concurrent_downloads": "concurrent_downloads", "play_sound_on_finish": "play_sound_on_finish", "min_file_size_kb": "min_file_size_kb" }
+    general_map_gui_to_orpheus = { "output_path": "download_path", "quality": "download_quality", "search_limit": "search_limit", "disabled_search_platforms": "disabled_search_platforms", "concurrent_downloads": "concurrent_downloads", "play_sound_on_finish": "play_sound_on_finish", "min_file_size_kb": "min_file_size_kb", "minimize_to_tray": "minimize_to_tray" }
     if "general" in gui_globals:
         gui_general_section = gui_globals["general"]
         if "general" not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"]["general"] = {}
@@ -18973,10 +18975,198 @@ def _on_hyperlink_click(event):
     except Exception as e:
         print(f"Error opening hyperlink: {e}")
 
+def _is_minimize_to_tray_enabled():
+    """Return True when close should hide to the system tray instead of quitting."""
+    try:
+        return bool(
+            current_settings.get("globals", {}).get("general", {}).get(
+                "minimize_to_tray",
+                DEFAULT_SETTINGS.get("globals", {}).get("general", {}).get("minimize_to_tray", False),
+            )
+        )
+    except Exception:
+        return False
+
+
+def _load_tray_pil_image():
+    """Load a PIL image for the system tray icon (ICO/PNG), with a simple fallback."""
+    candidates = []
+    ico_path = _resolve_app_icon_ico_path()
+    if ico_path:
+        candidates.append(ico_path)
+    for name in ("icon.png", "cover.png"):
+        try:
+            candidates.append(resource_path(name))
+        except Exception:
+            pass
+        try:
+            candidates.append(os.path.join(get_script_directory(), name))
+        except Exception:
+            pass
+        try:
+            if 'application_path' in globals() and application_path:
+                candidates.append(os.path.join(application_path, name))
+        except Exception:
+            pass
+        candidates.append(os.path.join(os.getcwd(), name))
+
+    resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.LANCZOS)
+    for path in candidates:
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            img = Image.open(path)
+            # Multi-size ICOs: pick a frame near 64px when available
+            try:
+                n_frames = getattr(img, "n_frames", 1) or 1
+                if n_frames > 1:
+                    best_idx, best_dist = 0, None
+                    for i in range(n_frames):
+                        img.seek(i)
+                        dist = abs(max(img.size) - 64)
+                        if best_dist is None or dist < best_dist:
+                            best_dist, best_idx = dist, i
+                    img.seek(best_idx)
+            except Exception:
+                pass
+            img = img.convert("RGBA")
+            if max(img.size) > 64:
+                img = img.resize((64, 64), resample)
+            return img
+        except Exception:
+            continue
+
+    # Solid fallback so tray still works without bundled icons
+    return Image.new("RGBA", (64, 64), (0, 112, 239, 255))
+
+
+def _stop_tray_icon():
+    """Stop and clear the system tray icon if it is running."""
+    global _tray_icon
+    icon = _tray_icon
+    _tray_icon = None
+    if icon is None:
+        return
+    try:
+        icon.stop()
+    except Exception as e:
+        print(f"[Tray] Error stopping tray icon: {e}")
+
+
+def _tray_show_window(icon=None, item=None):
+    """Restore the main window from the system tray (must marshal to the Tk thread)."""
+    def _show():
+        try:
+            if 'app' in globals() and app and app.winfo_exists():
+                app.deiconify()
+                try:
+                    app.state("normal")
+                except Exception:
+                    pass
+                app.lift()
+                app.focus_force()
+        except Exception as e:
+            print(f"[Tray] Error showing window: {e}")
+
+    try:
+        if 'app' in globals() and app and app.winfo_exists():
+            app.after(0, _show)
+        else:
+            _show()
+    except Exception:
+        _show()
+
+
+def _tray_exit_app(icon=None, item=None):
+    """Fully quit from the tray menu."""
+    global _tray_icon
+    try:
+        if icon is not None:
+            icon.stop()
+        elif _tray_icon is not None:
+            _tray_icon.stop()
+    except Exception:
+        pass
+    _tray_icon = None
+
+    def _do_exit():
+        _on_gui_exit()
+
+    try:
+        if 'app' in globals() and app and app.winfo_exists():
+            app.after(0, _do_exit)
+        else:
+            _do_exit()
+    except Exception:
+        try:
+            os._exit(0)
+        except Exception:
+            pass
+
+
+def _ensure_tray_icon():
+    """Create the system tray icon once. Returns True on success."""
+    global _tray_icon
+    if _tray_icon is not None:
+        return True
+    try:
+        import pystray
+        from pystray import MenuItem as TrayMenuItem
+    except ImportError:
+        print("[Tray] pystray is not installed; cannot minimize to tray.")
+        return False
+    try:
+        image = _load_tray_pil_image()
+        menu = pystray.Menu(
+            TrayMenuItem("Show OrpheusDL", _tray_show_window, default=True),
+            TrayMenuItem("Exit", _tray_exit_app),
+        )
+        icon = pystray.Icon("OrpheusDL", image, "OrpheusDL", menu)
+        _tray_icon = icon
+        if hasattr(icon, "run_detached"):
+            icon.run_detached()
+        else:
+            threading.Thread(target=icon.run, daemon=True).start()
+        return True
+    except Exception as e:
+        print(f"[Tray] Failed to create tray icon: {e}")
+        _tray_icon = None
+        return False
+
+
+def _hide_to_tray():
+    """Hide the main window and keep the app running via the system tray."""
+    if not _ensure_tray_icon():
+        show_centered_messagebox(
+            "System Tray Unavailable",
+            "Could not create a system tray icon. The application will close instead.\n\n"
+            "Install the 'pystray' package to enable Minimize to Tray.",
+            dialog_type="warning",
+        )
+        _on_gui_exit()
+        return
+    try:
+        if 'app' in globals() and app and app.winfo_exists():
+            app.withdraw()
+            print("[Tray] Window hidden to system tray.")
+    except Exception as e:
+        print(f"[Tray] Error hiding window: {e}")
+        _on_gui_exit()
+
+
+def _on_window_close_request():
+    """Handle the window close button: tray hide when enabled, otherwise quit."""
+    if _is_minimize_to_tray_enabled():
+        _hide_to_tray()
+    else:
+        _on_gui_exit()
+
+
 def _on_gui_exit():
     """Handles cleanup when the GUI is closing."""
     global app, _mutex_handle
     print("[Exit] GUI closing. Cleaning up temp directory...")
+    _stop_tray_icon()
     # Ensure any preview audio is stopped (especially on macOS where afplay keeps running)
     try:
         if 'stop_audio' in globals() and callable(stop_audio):
@@ -19548,6 +19738,7 @@ if __name__ == "__main__":
                     "disabled_search_platforms": [],
                     "concurrent_downloads": 5,
                     "play_sound_on_finish": True,
+                    "minimize_to_tray": False,
                 },
                 "artist_downloading": { "return_credited_albums": True, "separate_tracks_skip_downloaded": True },
                 "formatting": { "discography_format": "{name} {quality}", "album_format": "{artist}/{name}", "playlist_format": "{name}", "track_filename_format": "{track_number}. {artist} - {name}", "single_full_path_format": "{artist} - {name}", "metadata_separator": ";", "filename_separator": "", "split_metadata": True, "enable_zfill": True, "force_album_format": False, "use_playlist_position": False, "use_album_position": False },
@@ -20519,6 +20710,7 @@ if __name__ == "__main__":
             "general.disabled_search_platforms": "Platforms to include when searching with 'All' selected.",
             "general.concurrent_downloads": "Number of tracks to download simultaneously (1-10).\n\nRecommended values:\n• 1-3: Slower systems, limited bandwidth\n• 4-6: Most systems (balanced speed/stability)\n• 7-10: High-end systems, fast internet.",
             "general.play_sound_on_finish": "Play a notification sound when a download completes.",
+            "general.minimize_to_tray": "When closing the window, hide to the system tray (notification area) instead of quitting.\nLeft-click or choose Show to restore; choose Exit on the tray menu to quit fully.\nUseful for keeping downloads running in the background.",
             "artist_downloading.return_credited_albums": "Include albums where the artist is credited but not the main artist.",
             "artist_downloading.separate_tracks_skip_downloaded": "When downloading artists, skip tracks that are part of albums already downloaded.",
             "formatting.discography_format": """Album folders inside artist/label discography downloads.\nSame variables as Album Format. Use {name} if album_format already has {artist}.\nAdd {quality} for multiple editions (e.g. {name} {quality}); collisions are auto-disambiguated with a quality or ID suffix.""",
@@ -21764,7 +21956,7 @@ Unnecessary Lossless-to-Lossless""",
                  print(f"[Error] in _initial_ui_update: {e_init_update}")
 
         _initial_ui_update()
-        app.protocol("WM_DELETE_WINDOW", _on_gui_exit)
+        app.protocol("WM_DELETE_WINDOW", _on_window_close_request)
         _setup_macos_window_management()
         
         

@@ -226,6 +226,8 @@ a = Analysis(
         'structlog',
         'async_lru',
         'pywinstyles',
+        'pystray',
+        'six',
         'tkinterdnd2',
         'packaging',
         'base62',                   # Spotify ID conversion (module name is 'base62')
