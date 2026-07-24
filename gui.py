@@ -12957,49 +12957,6 @@ def _start_single_download(url_to_download, output_path_final, search_result_dat
             show_centered_messagebox("Download Error", "Deezer credentials are required for downloading. Please fill in either email and password, or arl in the settings.", dialog_type="warning")
             return False
 
-    # Qobuz: enforce specific App ID/Secret before download
-    if 'qobuz.com' in (url_to_download or '').lower():
-        required_qobuz_app_id = "798273057"
-        required_qobuz_app_secret = "05a4851e74ee47fda346f50cfdfc4f09"
-        qobuz_creds = (current_settings.get("credentials") or {}).get("Qobuz") or {}
-        current_app_id = str(qobuz_creds.get("app_id", "")).strip()
-        current_app_secret = str(qobuz_creds.get("app_secret", "")).strip()
-
-        if current_app_id != required_qobuz_app_id or current_app_secret != required_qobuz_app_secret:
-            prompt_message = (
-                "Qobuz currently needs the following App Id & Secret:\n\n"
-                f"App Id: {required_qobuz_app_id}\n"
-                f"App Secret: {required_qobuz_app_secret}\n\n"
-                "Shall I change them?"
-            )
-            should_update = show_centered_yes_no_dialog("Qobuz App Credentials Required", prompt_message)
-            if not should_update:
-                print("[Qobuz] Download refused: required App Id/App Secret not accepted.")
-                return False
-
-            # Update current settings and, if present, update the bound UI variables as well.
-            qobuz_creds["app_id"] = required_qobuz_app_id
-            qobuz_creds["app_secret"] = required_qobuz_app_secret
-            try:
-                qobuz_vars = settings_vars.get("credentials", {}).get("Qobuz", {})
-                if isinstance(qobuz_vars.get("app_id"), tkinter.StringVar):
-                    qobuz_vars["app_id"].set(required_qobuz_app_id)
-                if isinstance(qobuz_vars.get("app_secret"), tkinter.StringVar):
-                    qobuz_vars["app_secret"].set(required_qobuz_app_secret)
-            except Exception as e_qobuz_vars:
-                print(f"[Qobuz] Warning: Could not sync Qobuz App Id/Secret to settings UI vars: {e_qobuz_vars}")
-
-            if not save_settings(show_confirmation=False):
-                show_centered_messagebox(
-                    "Qobuz Settings Error",
-                    "Failed to save the required Qobuz App Id/App Secret. Download cancelled.",
-                    dialog_type="error"
-                )
-                return False
-            print("[Qobuz] App Id/App Secret updated to required values and saved.")
-
-
-
     # macOS/Linux: Deno is not bundled; required for YouTube downloads. Show install pop-up if missing.
     if platform.system() in ("Darwin", "Linux") and ('youtube.com' in url_to_download or 'youtu.be' in url_to_download):
         deno_found, _ = find_system_deno()
