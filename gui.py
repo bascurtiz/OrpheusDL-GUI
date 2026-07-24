@@ -10743,6 +10743,96 @@ def log_to_textbox(msg, error=False):
 _has_shown_unavailable_warning = False
 _last_auto_opened_qobuz_auth_url = None
 
+# --- Failed Tracks Panel state ---
+_failed_tracks_session = []  # list of (display_name, reason) tuples
+_current_download_track_name = None  # last "=== Downloading track X" seen in log
+
+def _clear_failed_tracks():
+    """Clear the failed tracks list and hide the panel. Call at the start of each new download."""
+    global _failed_tracks_session, _current_download_track_name
+    _failed_tracks_session = []
+    _current_download_track_name = None
+    _refresh_failed_panel()
+
+def _add_failed_track(name, reason):
+    global _failed_tracks_session
+    _failed_tracks_session.append((name, reason))
+    _refresh_failed_panel()
+
+def _refresh_failed_panel():
+    """Update the failed tracks panel widgets to match current _failed_tracks_session."""
+    try:
+        frame = globals().get('_failed_panel_frame')
+        label = globals().get('_failed_panel_label')
+        textbox = globals().get('_failed_panel_textbox')
+        if frame is None or not frame.winfo_exists():
+            return
+
+        count = len(_failed_tracks_session)
+        if count == 0:
+            frame.grid_remove()
+            return
+
+        lines = []
+        for name, reason in _failed_tracks_session:
+            if reason:
+                lines.append(f"• {name}: {reason}")
+            else:
+                lines.append(f"• {name}")
+        content = '\n'.join(lines)
+
+        if label and label.winfo_exists():
+            label.configure(text=f"FAILED TRACKS ({count})")
+        if textbox and textbox.winfo_exists():
+            textbox.configure(state='normal')
+            textbox.delete('1.0', 'end')
+            textbox.insert('end', content)
+            textbox.configure(state='disabled')
+
+        frame.grid()
+    except Exception:
+        pass
+
+def _detect_failed_track_from_log(raw_line):
+    """Parse a log line and update the failed tracks panel if it indicates a failure."""
+    global _current_download_track_name
+    try:
+        # Strip color/platform markers and ANSI escapes
+        plain = re.sub(r'\|(?:RED|YELLOW|GRAY|GREEN|WHITE|RESET|PLATFORM_\w+)\|', '', raw_line)
+        plain = re.sub(r'\x1b\[[0-9;]*m', '', plain).strip()
+
+        # Track current track name from sequential download header
+        m = re.search(r'=== Downloading track (.+?) \([\w\-]+\) ===', plain)
+        if m:
+            _current_download_track_name = m.group(1).strip()
+            return
+
+        # Seed track ID from retry messages when "=== Downloading track" hasn't appeared yet
+        if not _current_download_track_name:
+            m = re.search(r'\[Retry \d+(?:/\d+)?\].+?(?:for (?:track )?)([\w\-]+)', plain)
+            if m:
+                _current_download_track_name = m.group(1).strip()
+                return
+
+        # Sequential failure banner: "=== ✗ Track failed ===" / "=== x Track failed ==="
+        if re.search(r'=== .{0,5} Track failed', plain):
+            name = _current_download_track_name or 'Unknown track'
+            _add_failed_track(name, '')
+            _current_download_track_name = None
+            return
+
+        # Concurrent failure: "03/10 ❌ Track Name: Error reason (failed)"
+        # Also match Windows ASCII "x" from the core concurrent printer.
+        m = re.search(
+            r'\d+/\d+\s+(?:❌|x)\s+(.+?)(?::\s+(.+?))?\s*\(failed\)\s*$',
+            plain,
+            flags=re.IGNORECASE,
+        )
+        if m:
+            _add_failed_track(m.group(1).strip(), (m.group(2) or '').strip())
+    except Exception:
+        pass
+
 def _maybe_auto_open_qobuz_auth_url(msg):
     """Auto-open Qobuz OAuth URL once per unique URL during GUI sessions."""
     global _last_auto_opened_qobuz_auth_url
@@ -10917,6 +11007,22 @@ def update_log_area():
                 if 'Processing' in msg_strip and 'standalone tracks...' in msg_strip and 'Artist Progress:' in msg_strip:
                     log_to_textbox(f"{msg}\n")
                     continue
+                if msg_strip.startswith('[Retry succeeded]'):
+                    log_to_textbox(f"|GREEN|       {msg_strip}|RESET|\n")
+                    _detect_failed_track_from_log(msg_strip)
+                    messages_processed += 1
+                    if time.time() - start_time > max_processing_time:
+                        break
+                    continue
+                if msg_strip.startswith('[Retry ') or (
+                    msg_strip.startswith('[Retry') and ']' in msg_strip
+                ):
+                    log_to_textbox(f"|YELLOW|       {msg_strip}|RESET|\n")
+                    _detect_failed_track_from_log(msg_strip)
+                    messages_processed += 1
+                    if time.time() - start_time > max_processing_time:
+                        break
+                    continue
                 if 'Spotify authentication error during track download' in msg_strip or \
                    ('Download attempt' in msg_strip and 'failed. Retrying in' in msg_strip):
                     cleaned_message = msg_strip
@@ -10939,12 +11045,13 @@ def update_log_area():
                     log_to_textbox(msg)
                     continue
                 is_error = msg_strip.startswith(('[WARNING]', '[ERROR]'))
-                if is_error and (('Download attempt' in msg_strip and ('failed' in msg_strip or 'Retrying' in msg_strip)) or 
+                if is_error and (('Download attempt' in msg_strip and ('failed' in msg_strip or 'Retrying' in msg_strip)) or
                                 'Failed after 3 attempts' in msg_strip):
                     log_to_textbox(f"       {msg_strip}\n", error=is_error)
                 else:
                     log_to_textbox(msg, error=is_error)
 
+                _detect_failed_track_from_log(msg_strip)
                 messages_processed += 1
                 if time.time() - start_time > max_processing_time:
                     break
@@ -10986,6 +11093,7 @@ def clear_output_log():
     try:
         if 'log_textbox' in globals() and log_textbox and log_textbox.winfo_exists():
             log_textbox.configure(state='normal'); log_textbox.delete('1.0', tkinter.END); log_textbox.configure(state='disabled')
+        _clear_failed_tracks()
     except NameError: pass
     except tkinter.TclError as e: print(f"TclError clearing log (widget destroyed?): {e}")
     except Exception as e: print(f"Error clearing log: {e}")
@@ -13091,7 +13199,8 @@ def start_download_thread(search_result_data=None):
         input_text = url_entry.get().strip()
         if not input_text:
              show_centered_messagebox("Info", "Please enter a URL or a file path.", dialog_type="warning"); return
-        # New user-initiated download session: show Spotify suspension warning once.
+        # New user-initiated download session: reset failed tracks panel and Spotify warning flag.
+        _clear_failed_tracks()
         spotify_pre_download_warning_acknowledged = False
 
         output_path = path_var_main.get().strip()
@@ -16287,6 +16396,7 @@ def download_selected():
     global spotify_pre_download_warning_acknowledged
     try:
         # New user-initiated download session from search results.
+        _clear_failed_tracks()
         spotify_pre_download_warning_acknowledged = False
         selected_items = get_selected_items_data()
         if not selected_items: 
@@ -20312,6 +20422,60 @@ if __name__ == "__main__":
         log_textbox.bind("<MouseWheel>", _on_log_mousewheel)  # Windows/macOS
         log_textbox.bind("<Button-4>", lambda e: _on_log_mousewheel(type('Event', (), {'delta': 120})()))  # Linux scroll up
         log_textbox.bind("<Button-5>", lambda e: _on_log_mousewheel(type('Event', (), {'delta': -120})()))  # Linux scroll down
+
+        # --- Failed Tracks Panel ---
+        # Sits inside output_frame as row 2 (below the log); hidden until failures occur.
+        output_frame.grid_rowconfigure(2, weight=0)
+        _failed_panel_frame = customtkinter.CTkFrame(output_frame, fg_color=CONTAINER_COLOR, corner_radius=6)
+        _failed_panel_frame.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        _failed_panel_frame.grid_columnconfigure(1, weight=1)
+        _failed_panel_frame.grid_remove()  # hidden until there are failures
+        globals()['_failed_panel_frame'] = _failed_panel_frame
+
+        _fp_header = customtkinter.CTkFrame(_failed_panel_frame, fg_color="transparent")
+        _fp_header.grid(row=0, column=0, columnspan=3, sticky="ew", padx=6, pady=(4, 0))
+        _fp_header.grid_columnconfigure(1, weight=1)
+
+        _failed_panel_label = customtkinter.CTkLabel(
+            _fp_header, text="FAILED TRACKS",
+            text_color=ERROR_COLOR, font=("Segoe UI", 10, "bold"), anchor="w"
+        )
+        _failed_panel_label.grid(row=0, column=0, sticky="w")
+        globals()['_failed_panel_label'] = _failed_panel_label
+
+        def _copy_failed_tracks():
+            try:
+                lines = [f"{n}: {r}" if r else n for n, r in _failed_tracks_session]
+                app.clipboard_clear()
+                app.clipboard_append('\n'.join(lines))
+            except Exception:
+                pass
+
+        def _dismiss_failed_panel():
+            try:
+                _failed_panel_frame.grid_remove()
+            except Exception:
+                pass
+
+        customtkinter.CTkButton(
+            _fp_header, text="Copy", width=60, height=22,
+            fg_color=UI_ELEMENT_BG_COLOR, hover_color=LINK_COLOR,
+            command=_copy_failed_tracks
+        ).grid(row=0, column=2, sticky="e", padx=(4, 2))
+        customtkinter.CTkButton(
+            _fp_header, text="X", width=28, height=22,
+            fg_color=UI_ELEMENT_BG_COLOR, hover_color=LINK_COLOR,
+            command=_dismiss_failed_panel
+        ).grid(row=0, column=3, sticky="e", padx=(0, 4))
+
+        _failed_panel_textbox = tkinter.Text(
+            _failed_panel_frame, height=3, wrap=tkinter.WORD, state='disabled',
+            font=log_font, bg=CONTAINER_COLOR, fg=ERROR_COLOR,
+            relief="flat", borderwidth=0, highlightthickness=0, exportselection=False
+        )
+        _failed_panel_textbox.grid(row=1, column=0, columnspan=4, sticky="ew", padx=8, pady=(2, 6))
+        globals()['_failed_panel_textbox'] = _failed_panel_textbox
+
         bottom_frame = customtkinter.CTkFrame(download_tab, fg_color="transparent"); bottom_frame.grid(row=3, column=0, columnspan=4, sticky="ew", padx=10, pady=(5, 10)); bottom_frame.grid_columnconfigure(0, weight=1)
         progress_bar = customtkinter.CTkProgressBar(bottom_frame, indeterminate_speed=0.3); progress_bar.set(0); progress_bar.grid(row=0, column=0, sticky="ew", padx=(5, 5))
         clear_output_button = customtkinter.CTkButton(bottom_frame, text="Clear Output", width=100, height=30, command=clear_output_log, fg_color=UI_ELEMENT_BG_COLOR, hover_color=LINK_COLOR); clear_output_button.grid(row=0, column=1, sticky="e", padx=(5, 10))
