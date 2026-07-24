@@ -8389,6 +8389,12 @@ def load_settings():
                 if "disabled_search_platforms" in orpheus_general: settings["globals"]["general"]["disabled_search_platforms"] = orpheus_general["disabled_search_platforms"]
                 if "min_file_size_kb" in orpheus_general: settings["globals"]["general"]["min_file_size_kb"] = orpheus_general["min_file_size_kb"]
                 if "minimize_to_tray" in orpheus_general: settings["globals"]["general"]["minimize_to_tray"] = bool(orpheus_general["minimize_to_tray"])
+                if "throttle_batch_size" in orpheus_general:
+                    try: settings["globals"]["general"]["throttle_batch_size"] = int(orpheus_general["throttle_batch_size"])
+                    except (TypeError, ValueError): pass
+                if "throttle_pause_seconds" in orpheus_general:
+                    try: settings["globals"]["general"]["throttle_pause_seconds"] = int(orpheus_general["throttle_pause_seconds"])
+                    except (TypeError, ValueError): pass
             for section_key, section_data in orpheus_global_from_file.items():
                  if section_key != "general" and section_key in settings["globals"]:
                      if isinstance(section_data, dict) and isinstance(settings["globals"].get(section_key), dict):
@@ -8825,7 +8831,7 @@ def save_settings(show_confirmation: bool = True):
          return False
     mapped_orpheus_updates = { "global": {"general": {},"formatting": {},"codecs": {},"covers": {},"playlist": {},"advanced": {},"module_defaults": {},"artist_downloading": {},"lyrics": {}}, "modules": {} }
     gui_globals = updated_gui_settings.get("globals", {})
-    general_map_gui_to_orpheus = { "output_path": "download_path", "quality": "download_quality", "search_limit": "search_limit", "disabled_search_platforms": "disabled_search_platforms", "concurrent_downloads": "concurrent_downloads", "play_sound_on_finish": "play_sound_on_finish", "min_file_size_kb": "min_file_size_kb", "minimize_to_tray": "minimize_to_tray" }
+    general_map_gui_to_orpheus = { "output_path": "download_path", "quality": "download_quality", "search_limit": "search_limit", "disabled_search_platforms": "disabled_search_platforms", "concurrent_downloads": "concurrent_downloads", "play_sound_on_finish": "play_sound_on_finish", "min_file_size_kb": "min_file_size_kb", "minimize_to_tray": "minimize_to_tray", "throttle_batch_size": "throttle_batch_size", "throttle_pause_seconds": "throttle_pause_seconds" }
     if "general" in gui_globals:
         gui_general_section = gui_globals["general"]
         if "general" not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"]["general"] = {}
@@ -12301,6 +12307,8 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                     "search_limit": fresh_section.get("search_limit", default_section.get("search_limit", 25)),
                     "concurrent_downloads": fresh_section.get("concurrent_downloads", default_section.get("concurrent_downloads", 5)),
                     "play_sound_on_finish": fresh_section.get("play_sound_on_finish", default_section.get("play_sound_on_finish", False)),
+                    "throttle_batch_size": fresh_section.get("throttle_batch_size", default_section.get("throttle_batch_size", 0)),
+                    "throttle_pause_seconds": fresh_section.get("throttle_pause_seconds", default_section.get("throttle_pause_seconds", 30)),
                     "progress_bar": False,
                 }
                 # GUI log uses its own layout; disable tqdm bars so they do not pad lines before status text.
@@ -19805,6 +19813,8 @@ if __name__ == "__main__":
                     "concurrent_downloads": 5,
                     "play_sound_on_finish": True,
                     "minimize_to_tray": False,
+                    "throttle_batch_size": 0,
+                    "throttle_pause_seconds": 30,
                 },
                 "artist_downloading": { "return_credited_albums": True, "separate_tracks_skip_downloaded": True },
                 "formatting": { "discography_format": "{name} {quality}", "album_format": "{artist}/{name}", "playlist_format": "{name}", "track_filename_format": "{track_number}. {artist} - {name}", "single_full_path_format": "{artist} - {name}", "metadata_separator": ";", "filename_separator": "", "split_metadata": True, "enable_zfill": True, "force_album_format": False, "use_playlist_position": False, "use_album_position": False },
@@ -20777,6 +20787,8 @@ if __name__ == "__main__":
             "general.concurrent_downloads": "Number of tracks to download simultaneously (1-10).\n\nRecommended values:\n• 1-3: Slower systems, limited bandwidth\n• 4-6: Most systems (balanced speed/stability)\n• 7-10: High-end systems, fast internet.",
             "general.play_sound_on_finish": "Play a notification sound when a download completes.",
             "general.minimize_to_tray": "When closing the window, hide to the system tray (notification area) instead of quitting.\nLeft-click or choose Show to restore; choose Exit on the tray menu to quit fully.\nUseful for keeping downloads running in the background.",
+            "general.throttle_batch_size": "How many tracks to download before pausing (batch size).\nSet to 0 to disable batch throttling.\nExample: 50 downloads 50 tracks, pauses, then continues — useful for large playlists (e.g. Qobuz) to reduce rate limiting.",
+            "general.throttle_pause_seconds": "How long to pause (in seconds) between batches when Throttle Batch Size is greater than 0.\nExample: batch size 50 and pause 30 → download 50 tracks, wait 30 seconds, repeat.",
             "artist_downloading.return_credited_albums": "Include albums where the artist is credited but not the main artist.",
             "artist_downloading.separate_tracks_skip_downloaded": "When downloading artists, skip tracks that are part of albums already downloaded.",
             "formatting.discography_format": """Album folders inside artist/label discography downloads.\nSame variables as Album Format. Use {name} if album_format already has {artist}.\nAdd {quality} for multiple editions (e.g. {name} {quality}); collisions are auto-disambiguated with a quality or ID suffix.""",
