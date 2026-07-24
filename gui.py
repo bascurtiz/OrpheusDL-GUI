@@ -1590,6 +1590,7 @@ def amazonmusic_oauth_flow_handler(oauth_url: str, application_name: str) -> str
 file_download_queue = []
 output_queue = queue.Queue()
 _active_download_thread = None
+_interruptible_download_thread = None  # inner worker from run_interruptible_download (must not be abandoned)
 current_batch_output_path = None
 _current_download_context = None
 spotify_pre_download_warning_acknowledged = False
@@ -8059,20 +8060,128 @@ def _cancelled_completion_replacement(message_str):
 
 
 def _wait_for_active_download_thread_to_stop(timeout=120):
-    """Block until a prior download worker exits so its stdout cannot pollute a new session."""
-    global _active_download_thread
-    thread = _active_download_thread
-    if thread is None or not thread.is_alive():
+    """Block until prior download workers exit so their stdout cannot pollute a new session."""
+    global _active_download_thread, _interruptible_download_thread, _download_cancelled
+
+    def _alive(thread):
+        return thread is not None and thread.is_alive()
+
+    outer = _active_download_thread
+    inner = _interruptible_download_thread
+    if not _alive(outer) and not _alive(inner):
         return True
+
     if 'output_queue' in globals() and output_queue:
         output_queue.put('|GRAY|Waiting for previous download to finish stopping...|RESET|\n')
-    thread.join(timeout=timeout)
-    if thread.is_alive():
-        if 'output_queue' in globals() and output_queue:
-            output_queue.put('|GRAY|Previous download is still stopping. Please try again shortly.|RESET|\n')
-        return False
-    return True
 
+    # Keep cancellation asserted so an orphaned worker cannot print "Album completed"
+    # into the next download session.
+    deadline = time.time() + max(1.0, float(timeout))
+    while time.time() < deadline:
+        if _alive(inner) or _alive(outer):
+            _download_cancelled = True
+        if _alive(inner):
+            inner.join(timeout=0.5)
+        if _alive(outer):
+            outer.join(timeout=0.5)
+        if not _alive(outer) and not _alive(inner):
+            _download_cancelled = False
+            if _interruptible_download_thread is inner:
+                _interruptible_download_thread = None
+            if _active_download_thread is outer and not _alive(outer):
+                _active_download_thread = None
+            return True
+
+    if 'output_queue' in globals() and output_queue:
+        output_queue.put('|GRAY|Previous download is still stopping. Please try again shortly.|RESET|\n')
+    return False
+
+
+def run_interruptible_download(download_func, stop_event, *args, **kwargs):
+    """
+    Runs a download function in a way that can be interrupted by checking stop_event.
+    This approach uses a global cancellation flag and monkey-patching to make downloads more responsive to cancellation.
+    """
+    import threading
+    import time
+    global _download_cancelled, _interruptible_download_thread
+    _download_cancelled = False
+
+    result = {'completed': False, 'exception': None, 'result': None}
+
+    def download_worker():
+        try:
+            result['result'] = download_func(*args, **kwargs)
+            result['completed'] = True
+        except Exception as e:
+            result['exception'] = e
+            result['completed'] = True
+
+    download_thread = threading.Thread(target=download_worker, daemon=True)
+    _interruptible_download_thread = download_thread
+    download_thread.start()
+    check_interval = 0.1
+    # Soft timeout: show UI feedback, but keep waiting so workers are not orphaned.
+    soft_cancel_timeout = 3.0
+    hard_cancel_timeout = 90.0
+    cancellation_start_time = None
+    soft_timeout_announced = False
+
+    try:
+        while download_thread.is_alive():
+            if stop_event.is_set():
+                _download_cancelled = True
+
+                if cancellation_start_time is None:
+                    cancellation_start_time = time.time()
+                elapsed = time.time() - cancellation_start_time
+
+                if elapsed > soft_cancel_timeout and not soft_timeout_announced:
+                    soft_timeout_announced = True
+                    print("|GRAY|Download cancellation in progress. Waiting for workers to stop...|RESET|")
+                    # Keep UI in downloading/stopping state until workers actually exit.
+                    # Unlocking early allowed a second session to start while the first
+                    # still finished tracks and printed a premature "Album completed".
+
+                download_thread.join(timeout=1.0)
+                if not download_thread.is_alive():
+                    try:
+                        if 'app' in globals() and app and app.winfo_exists():
+                            app.after(0, lambda: set_ui_state_downloading(False))
+                    except Exception:
+                        pass
+                    raise DownloadCancelledError("Download cancelled by user")
+
+                if elapsed > hard_cancel_timeout:
+                    # Still track the thread so the next download waits for it.
+                    print("|GRAY|Download workers are still stopping in the background.|RESET|")
+                    try:
+                        if 'app' in globals() and app and app.winfo_exists():
+                            app.after(0, lambda: set_ui_state_downloading(False))
+                    except Exception:
+                        pass
+                    raise DownloadCancelledError("Download cancelled by user (timeout)")
+
+            else:
+                time.sleep(check_interval)
+    finally:
+        still_running = download_thread.is_alive()
+        if not still_running:
+            if _interruptible_download_thread is download_thread:
+                _interruptible_download_thread = None
+            # Only clear the cancel flag when this worker has fully stopped.
+            # Otherwise a new session could reset it while this worker prints completion.
+            if not stop_event.is_set():
+                _download_cancelled = False
+        # If still running after cancel, leave _download_cancelled True and keep the thread ref.
+
+    if result['exception']:
+        raise result['exception']
+
+    if stop_event.is_set() or _download_cancelled:
+        raise DownloadCancelledError("Download cancelled by user")
+
+    return result['result']
 class QualityEnum(enum.Enum):
     MINIMUM = 1
     LOW = 2
@@ -11481,57 +11590,6 @@ class QueueWriter(io.TextIOBase):
     def writable(self):
         return True
 
-def run_interruptible_download(download_func, stop_event, *args, **kwargs):
-    """
-    Runs a download function in a way that can be interrupted by checking stop_event.
-    This approach uses a global cancellation flag and monkey-patching to make downloads more responsive to cancellation.
-    """
-    import threading
-    import time
-    global _download_cancelled
-    _download_cancelled = False
-
-    result = {'completed': False, 'exception': None, 'result': None}
-
-    def download_worker():
-        try:
-            result['result'] = download_func(*args, **kwargs)
-            result['completed'] = True
-        except Exception as e:
-            result['exception'] = e
-            result['completed'] = True
-    download_thread = threading.Thread(target=download_worker, daemon=True)
-    download_thread.start()
-    check_interval = 0.1
-    cancellation_timeout = 3.0
-    cancellation_start_time = None
-
-    while download_thread.is_alive():
-        if stop_event.is_set():
-            _download_cancelled = True
-
-            if cancellation_start_time is None:
-                cancellation_start_time = time.time()
-            download_thread.join(timeout=1.0)
-            if time.time() - cancellation_start_time > cancellation_timeout:
-                print("|GRAY|Download cancellation timeout reached. Forcing UI reset.|RESET|")
-                try:
-                    if 'app' in globals() and app and app.winfo_exists():
-                        app.after(0, lambda: set_ui_state_downloading(False))
-                except:
-                    pass
-                raise DownloadCancelledError("Download cancelled by user (timeout)")
-
-            if not download_thread.is_alive():
-                raise DownloadCancelledError("Download cancelled by user")
-
-        time.sleep(check_interval)
-    _download_cancelled = False
-    if result['exception']:
-        raise result['exception']
-
-    return result['result']
-
 def patch_download_file_for_cancellation():
     """
     Monkey-patch the download_file function and concurrent download methods to check for cancellation during downloads.
@@ -11837,7 +11895,8 @@ def patch_download_file_for_cancellation():
                                 for remaining_future in future_to_index:
                                     if not remaining_future.done():
                                         remaining_future.cancel()
-                                executor.shutdown(wait=False)
+                                # Do not shutdown(wait=False): abandoning in-flight workers lets them
+                                # keep downloading and print "Album completed" into a later session.
                                 cancelled_during_pool = True
                                 break
 
@@ -11855,6 +11914,8 @@ def patch_download_file_for_cancellation():
                                     progress_queue, completion_counter, total_tasks, indent_prefix
                                 )
 
+                    # After cancel, drain any late progress then wait for in-flight workers via
+                    # ThreadPoolExecutor context exit (wait=True).
                     completion_counter = _emit_concurrent_track_progress(
                         progress_queue, completion_counter, total_tasks, indent_prefix
                     )
@@ -13117,16 +13178,21 @@ def update_search_types(platform):
     platform_key = (platform or "").strip().lower()
 
     # Base types for all platforms
-    base_types = ["track", "artist", "playlist", "album"]
+    # Prefer Artist > Album > Track > Playlist (matches typical browse order).
+    preferred_type_order = ["artist", "album", "track", "playlist", "label", "channel"]
+    base_types = ["artist", "album", "track", "playlist"]
     
-    # Platform-specific overrides (only adding "label" where supported)
+    # Platform-specific overrides (only adding "label"/"channel" where supported)
     platform_types = {
         "youtube": ["track", "playlist", "channel"],
         "beatport": ["track", "artist", "playlist", "album", "label"],
         "beatsource": ["track", "artist", "playlist", "album", "label"]
     }
     
-    available_types = sorted(platform_types.get(platform_key, base_types[:]))
+    raw_types = platform_types.get(platform_key, base_types[:])
+    available_types = [t for t in preferred_type_order if t in raw_types]
+    # Keep any unexpected platform-specific values at the end
+    available_types.extend([t for t in raw_types if t not in available_types])
 
     try:
         if 'type_var' in globals() and type_var and 'type_combo' in globals() and type_combo and type_combo.winfo_exists():
