@@ -18173,18 +18173,17 @@ def _create_credential_tab_content(platform_name, tab_frame):
             )
             optional_label.pack(anchor="w", padx=(_setup_header_title_indent(), 0), pady=(2, 0))
             
-            wrapper_repo_url = "https://github.com/glomatico/wrapper-v2"
-            wrapper_readme_url = "https://github.com/glomatico/wrapper-v2#building"
+            wrapper_demo_url = "https://youtu.be/NxDHE6F_Aes"
 
             wrapper_demo_btn = customtkinter.CTkButton(
                 help_frame,
-                text="Open guide",
+                text="See demo",
                 width=80,
                 height=26,
                 font=("Segoe UI", 11),
                 fg_color=BUTTON_COLOR,
                 hover_color=LINK_COLOR,
-                command=lambda: _open_url(wrapper_repo_url)
+                command=lambda: _open_url(wrapper_demo_url)
             )
             wrapper_demo_btn.place(relx=1.0, y=20, anchor="ne", x=-15)
 
@@ -18217,48 +18216,13 @@ def _create_credential_tab_content(platform_name, tab_frame):
             ))
 
             _pack_wrapper_step(right_col, 2, lambda row: (
-                customtkinter.CTkLabel(row, text="Clone ", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left"),
-                _add_setup_link(row, "wrapper-v2", wrapper_repo_url),
-                customtkinter.CTkLabel(row, text=" and stage Apple Music Android libs", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left"),
-            ))
-
-            step3_note = customtkinter.CTkFrame(right_col, fg_color="transparent")
-            step3_note.pack(anchor="w", padx=(_setup_header_title_indent(), 0), pady=(0, 2))
-            customtkinter.CTkLabel(
-                step3_note,
-                text="(see wrapper-v2 README — Apple Music APK required)",
-                font=("Segoe UI", 12, "italic"),
-                text_color=GRAY_TEXT_COLOR,
-            ).pack(side="left")
-            _add_setup_link(step3_note, " Setup guide", wrapper_readme_url)
-
-            _pack_wrapper_step(right_col, 3, lambda row: customtkinter.CTkLabel(
-                row,
-                text="In the wrapper-v2 folder, run: docker compose up --build",
-                font=("Segoe UI", 12),
-                text_color=GRAY_TEXT_COLOR,
-            ).pack(side="left", anchor="w"))
-
-            _pack_wrapper_step(right_col, 4, lambda row: customtkinter.CTkLabel(
-                row,
-                text="Sign in to the wrapper (first time): POST /login with your Apple ID, or set WRAPPER_USERNAME + WRAPPER_PASSWORD in Docker.",
-                font=("Segoe UI", 12),
-                text_color=GRAY_TEXT_COLOR,
-                wraplength=360,
-                justify="left",
-            ).pack(side="left", anchor="w"))
-
-            _pack_wrapper_step(right_col, 5, lambda row: (
-                customtkinter.CTkLabel(row, text="Enable ", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left"),
-                customtkinter.CTkLabel(row, text="Use Wrapper", font=("Segoe UI", 12, "italic"), text_color=GRAY_TEXT_COLOR).pack(side="left"),
-                customtkinter.CTkLabel(row, text=" above, Wrapper URL ", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left"),
-                customtkinter.CTkLabel(row, text="127.0.0.1", font=("Segoe UI", 12, "italic"), text_color=GRAY_TEXT_COLOR).pack(side="left"),
-                customtkinter.CTkLabel(row, text=", then Save.", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left"),
+                customtkinter.CTkLabel(row, text="See description below ", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left"),
+                _add_setup_link(row, "video", wrapper_demo_url),
             ))
 
             customtkinter.CTkLabel(
                 right_col,
-                text="Keep Docker and the wrapper container running while downloading ALAC.",
+                text="Keep Docker and the wrapper container running while downloading.",
                 font=("Segoe UI", 12),
                 text_color=GRAY_TEXT_COLOR,
                 wraplength=360,
