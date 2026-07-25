@@ -8284,7 +8284,14 @@ def load_settings():
                     },
                     "codecs": {
                         "proprietary_codecs": False,
-                        "spatial_codecs": True
+                        "spatial_codecs": True,
+                        "include_dolby_atmos": False,
+                    },
+                    "artist_downloading": {
+                        "return_credited_albums": True,
+                        "separate_tracks_skip_downloaded": True,
+                        "prefer_highest_quality_edition": True,
+                        "explicit_content": "prefer_explicit",
                     },
                     "advanced": {
                         "download_mode": "ytdlp",
@@ -8395,6 +8402,12 @@ def load_settings():
                 if "throttle_pause_seconds" in orpheus_general:
                     try: settings["globals"]["general"]["throttle_pause_seconds"] = int(orpheus_general["throttle_pause_seconds"])
                     except (TypeError, ValueError): pass
+                # Migrate legacy quality=atmos → hifi + Include Dolby Atmos
+                _q = str(settings["globals"]["general"].get("quality", "") or "").lower()
+                if _q == "atmos":
+                    settings["globals"]["general"]["quality"] = "hifi"
+                    settings.setdefault("globals", {}).setdefault("codecs", {})["include_dolby_atmos"] = True
+                    settings["globals"]["codecs"]["spatial_codecs"] = True
             for section_key, section_data in orpheus_global_from_file.items():
                  if section_key != "general" and section_key in settings["globals"]:
                      if isinstance(section_data, dict) and isinstance(settings["globals"].get(section_key), dict):
@@ -8432,6 +8445,12 @@ def load_settings():
                                         settings["globals"][section_key][key] = copy.deepcopy(value)
                          else:
                              deep_merge(settings["globals"][section_key], section_data)
+            # Post-merge: migrate atmos quality if still present (e.g. only in GUI layer)
+            _q2 = str(settings.get("globals", {}).get("general", {}).get("quality", "") or "").lower()
+            if _q2 == "atmos":
+                settings["globals"]["general"]["quality"] = "hifi"
+                settings.setdefault("globals", {}).setdefault("codecs", {})["include_dolby_atmos"] = True
+                settings["globals"]["codecs"]["spatial_codecs"] = True
         if "modules" in file_settings:
             settings["modules"] = copy.deepcopy(file_settings["modules"])
             platform_map_from_orpheus = { "bugs": "Bugs", "nugs": "Nugs", "soundcloud": "SoundCloud", "tidal": "TIDAL", "qobuz": "Qobuz", "deezer": "Deezer", "idagio": "Idagio", "lrclib": "LRCLIB", "napster": "Napster", "beatport": "Beatport", "beatsource": "Beatsource", "musixmatch": "Musixmatch", "spotify": "Spotify", "applemusic": "Apple Music", "amazonmusic": "Amazon Music", "youtube": "YouTube" }
@@ -12452,6 +12471,12 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             if isinstance(_gui_q, str) and _gui_q.strip():
                 downloader_settings.setdefault("general", {})["download_quality"] = _gui_q.strip().lower()
 
+        # One-shot quality override from search context menu (e.g. Atmos for a single item)
+        if search_result_data and isinstance(search_result_data, dict):
+            _ov = (search_result_data.get('extra_kwargs') or {}).get('download_quality_override')
+            if isinstance(_ov, str) and _ov.strip():
+                downloader_settings.setdefault("general", {})["download_quality"] = _ov.strip().lower()
+
         # Move module detection earlier to handle quality fallbacks
         parsed_url = urlparse(url); components = parsed_url.path.split('/'); module_name = None
         for netloc_pattern, mod_name in orpheus.module_netloc_constants.items():
@@ -12500,6 +12525,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         # so an Atmos-labelled folder ends up holding non-Atmos files.
         if downloader_settings.get("general", {}).get("download_quality") == "atmos":
             downloader_settings.setdefault("codecs", {})["spatial_codecs"] = True
+            downloader_settings.setdefault("codecs", {})["include_dolby_atmos"] = True
 
         yield_to_gui()
 
@@ -14807,7 +14833,31 @@ def _select_quality_and_download(quality_value):
         # Update the global quality setting
         if 'settings_vars' in globals() and settings_vars:
             quality_var = settings_vars.get("globals", {}).get("general.quality")
-            if quality_var and isinstance(quality_var, tkinter.StringVar):
+            if quality_value == 'atmos':
+                # Atmos is not a persistent stream tier — enable Atmos include for discography,
+                # and pass a one-shot override for this download.
+                for item in selected_items:
+                    if 'extra_kwargs' not in item:
+                        item['extra_kwargs'] = {}
+                    item['extra_kwargs']['download_quality_override'] = 'atmos'
+                atmos_var = settings_vars.get("globals", {}).get("codecs.include_dolby_atmos")
+                if atmos_var is not None:
+                    try:
+                        atmos_var.set(True)
+                    except Exception:
+                        pass
+                spatial_var = settings_vars.get("globals", {}).get("codecs.spatial_codecs")
+                if spatial_var is not None:
+                    try:
+                        spatial_var.set(True)
+                    except Exception:
+                        pass
+                if current_settings and isinstance(current_settings, dict):
+                    current_settings.setdefault("globals", {}).setdefault("codecs", {})["include_dolby_atmos"] = True
+                    current_settings["globals"]["codecs"]["spatial_codecs"] = True
+                print("Atmos selected for this download; Include Dolby Atmos enabled")
+                save_settings(show_confirmation=False)
+            elif quality_var and isinstance(quality_var, tkinter.StringVar):
                 quality_var.set(quality_value)
                 print(f"Quality set to: {quality_value}")
                 # Auto-save the setting
@@ -19926,11 +19976,17 @@ if __name__ == "__main__":
                     "throttle_batch_size": 0,
                     "throttle_pause_seconds": 30,
                 },
-                "artist_downloading": { "return_credited_albums": True, "separate_tracks_skip_downloaded": True },
+                "artist_downloading": {
+                    "return_credited_albums": True,
+                    "separate_tracks_skip_downloaded": True,
+                    "prefer_highest_quality_edition": True,
+                    "explicit_content": "prefer_explicit",
+                },
                 "formatting": { "discography_format": "{name} {quality}", "album_format": "{artist}/{name}", "playlist_format": "{name}", "track_filename_format": "{track_number}. {artist} - {name}", "single_full_path_format": "{artist} - {name}", "metadata_separator": ";", "filename_separator": "", "split_metadata": True, "enable_zfill": True, "force_album_format": False, "use_playlist_position": False, "use_album_position": False },
                 "codecs": {
                     "proprietary_codecs": False,
-                    "spatial_codecs": True
+                    "spatial_codecs": True,
+                    "include_dolby_atmos": False,
                 },
                 "module_defaults": { "lyrics": "default", "covers": "default", "credits": "default" },
                 "lyrics": { "embed_lyrics": True, "embed_synced_lyrics": False, "save_synced_lyrics": True },
@@ -20945,7 +21001,7 @@ if __name__ == "__main__":
         row = 0
         tooltip_texts = {
             "general.output_path": "The main folder where all downloads will be saved.",
-            "general.quality": "Select the desired audio quality preference.",
+            "general.quality": "Stream/output quality to request when downloading.\nHi-Res/Lossless/High/Low control the audio stream tier.\nFor discography edition preference (which release to pick), see Artist Downloading → Prefer Highest Quality Edition.\nDolby Atmos is controlled separately under Codecs → Include Dolby Atmos.",
             "general.search_limit": "Maximum number of results to display in the Search tab.",
             "general.disabled_search_platforms": "Platforms to include when searching with 'All' selected.",
             "general.concurrent_downloads": "Number of tracks to download simultaneously (1-10).\n\nRecommended values:\n• 1-3: Slower systems, limited bandwidth\n• 4-6: Most systems (balanced speed/stability)\n• 7-10: High-end systems, fast internet.",
@@ -20955,7 +21011,9 @@ if __name__ == "__main__":
             "general.throttle_pause_seconds": "How long to pause (in seconds) between batches when Throttle Batch Size is greater than 0.\nExample: batch size 50 and pause 30 → download 50 tracks, wait 30 seconds, repeat.",
             "artist_downloading.return_credited_albums": "Include albums where the artist is credited but not the main artist.",
             "artist_downloading.separate_tracks_skip_downloaded": "When downloading artists, skip tracks that are part of albums already downloaded.",
-            "formatting.discography_format": """Album folders inside artist/label discography downloads.\nSame variables as Album Format. Use {name} if album_format already has {artist}.\nAdd {quality} for multiple editions (e.g. {name} {quality}); collisions are auto-disambiguated with a quality or ID suffix.""",
+            "artist_downloading.prefer_highest_quality_edition": "When downloading an artist/label discography, group duplicate editions of the same album and download only the highest-priority version (Hi-Res > FLAC > Atmos if enabled).\nDisable to download every listed edition.",
+            "artist_downloading.explicit_content": "How to handle explicit vs clean editions during discography downloads:\n• prefer_explicit — prefer explicit when both exist; otherwise take whatever is available\n• non_explicit_only — download only clean versions; skip if only explicit exists\n• both — download explicit and clean editions when both exist",
+            "formatting.discography_format": """Album folders inside artist/label discography downloads.\nSame variables as Album Format. Use {name} if album_format already has {artist}.\nAdd {quality} for multiple editions (e.g. {name} {quality}); collisions are auto-disambiguated with a version or ID suffix.""",
             "formatting.album_format": """Folder structure for albums. Variables:
  {artist}, {artist_id}, {artist_initials}, {album_artist}, {name}
  {id}, {label}, {catalog_number}, {release_year}
@@ -20977,7 +21035,8 @@ if __name__ == "__main__":
             "formatting.use_playlist_position": "Use track's position in the playlist for {track_number} in filenames and tags (instead of the original album track number).\nUse {playlist_position} in filename template if you want playlist order without changing album track numbers.",
             "formatting.use_album_position": "Use sequential album-wide track numbers for {track_number} in filenames and tags (1 through total album tracks), ignoring per-disc resets.\nLeave disabled to keep each disc numbered from 1 (recommended for multi-disc albums).",
             "codecs.proprietary_codecs": "Enable potentially proprietary codecs like MQA (if supported by module).",
-            "codecs.spatial_codecs": "Enable spatial audio codecs like Dolby Atmos (if supported by module).",
+            "codecs.spatial_codecs": "Enable decoding of spatial audio codecs (required to actually download Dolby Atmos streams).",
+            "codecs.include_dolby_atmos": "Include Dolby Atmos editions when choosing among duplicate releases in a discography.\nWhen off, Atmos editions are skipped (Atmos-only albums are skipped entirely).\nWhen on, Atmos ranks below Hi-Res and FLAC.",
             "module_defaults.lyrics": "Default provider for lyrics when the source platform does not return usable lyrics.\nUse 'default' to auto-pick the best available lyrics module.",
             "module_defaults.covers": "Default provider for cover art when the source platform image is missing/low quality.\nUse 'default' to auto-pick the best available cover module.",
             "module_defaults.credits": "Default provider for track credits when credits are missing from the source platform.\nUse 'default' to auto-pick the best available credits module.",
@@ -21310,11 +21369,25 @@ Unnecessary Lossless-to-Lossless""",
                                                                border_color=None)
                             browse_btn.grid(row=row, column=2, sticky="w", padx=(5, 5))
                          elif section_key == "general" and field == "quality":
-                            quality_options = ["atmos", "hifi", "lossless", "high", "low"]
+                            quality_options = ["hifi", "lossless", "high", "low"]
                             current_val_str = var.get().lower()
-                            if current_val_str not in quality_options: var.set(quality_options[1]) # default to hifi if invalid
+                            if current_val_str == "atmos" or current_val_str not in quality_options:
+                                var.set(quality_options[0])  # default to hifi if invalid/legacy atmos
                             widget = customtkinter.CTkComboBox(global_settings_frame, variable=var, values=quality_options, state="readonly", 
                                                                 dropdown_fg_color=CONTAINER_COLOR)
+                            widget.grid(row=row, column=1, sticky="ew", padx=(5, 5), pady=2)
+                         elif section_key == "artist_downloading" and field == "explicit_content":
+                            explicit_options = ["prefer_explicit", "non_explicit_only", "both"]
+                            current_explicit = str(var.get() or "").lower()
+                            if current_explicit not in explicit_options:
+                                var.set(explicit_options[0])
+                            widget = customtkinter.CTkComboBox(
+                                global_settings_frame,
+                                variable=var,
+                                values=explicit_options,
+                                state="readonly",
+                                dropdown_fg_color=CONTAINER_COLOR,
+                            )
                             widget.grid(row=row, column=1, sticky="ew", padx=(5, 5), pady=2)
                          elif section_key == "general" and field == "concurrent_downloads":
                             try:
