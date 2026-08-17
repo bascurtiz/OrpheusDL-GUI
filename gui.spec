@@ -178,7 +178,9 @@ else:
 
 a = Analysis(
     ['gui.py'],
-    pathex=['.', os.path.join(SPEC_DIR, 'vendor', 'librespot'), os.path.join(SPEC_DIR, 'modules', 'applemusic', 'gamdl')],
+    # gamdl is pulled from pip (gamdl>=3.8.5) so the compiled Rust decrypt engine
+    # (gamdl._ammuxer) is bundled from site-packages instead of the vendored source copy.
+    pathex=['.', os.path.join(SPEC_DIR, 'vendor', 'librespot')],
     binaries=additional_binaries + ffmpeg_binaries + dc_binaries + iq_binaries + _tkdnd_binaries + structlog_binaries + httpx_retries_binaries,
     datas=additional_datas + ffmpeg_datas + dc_datas + iq_datas + _tkdnd_datas + structlog_datas + httpx_retries_datas,
     hiddenimports=[
@@ -247,8 +249,15 @@ a = Analysis(
         'ifaddr',                   # Dependency for zeroconf
         'pyogg',                    # Dependency for librespot
         'modules.applemusic.interface',
+        'gamdl',                    # Apple Music (pip install gamdl>=3.8.5)
+        'gamdl._ammuxer',           # Compiled Rust decrypt/mux extension inside the gamdl wheel
     ] + ffmpeg_hiddenimports + dc_hiddenimports + iq_hiddenimports + _tkdnd_hiddenimports + structlog_hiddenimports + httpx_retries_hiddenimports + _librespot_hiddenimports + _librespot_player_hi,
-    excludes=['torch', 'cuda', 'pytorch', 'matplotlib', 'pandas', 'numpy'],
+    excludes=[
+        'torch', 'cuda', 'pytorch', 'matplotlib', 'pandas', 'numpy',
+        # The app is tkinter/customtkinter only; exclude Qt so PyInstaller never
+        # tries to collect multiple Qt bindings (PyQt6 + PySide6) from the env.
+        'PyQt5', 'PyQt6', 'PySide2', 'PySide6',
+    ],
     hookspath=['.'],
     hooksconfig={},
     runtime_hooks=['hook-ffmpeg.py'],  # Pre-import ffmpeg to avoid circular import

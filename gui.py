@@ -62,9 +62,14 @@ if application_path not in sys.path:
 
 os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
 
-from utils.vendor_bootstrap import bootstrap_vendor_paths, insert_gamdl_sys_path
+from utils.vendor_bootstrap import bootstrap_vendor_paths
 bootstrap_vendor_paths()
-insert_gamdl_sys_path(os.path.join(application_path, 'modules', 'applemusic'))
+
+# gamdl is a pip dependency (gamdl>=3.8.5 ships the compiled Rust decrypt engine).
+try:
+    import gamdl  # noqa: F401
+except ImportError:
+    print("[Apple Music Error] gamdl is not installed — run: pip install gamdl>=3.8.5")
 
 from utils.utils import (
     find_system_ffmpeg,
@@ -17886,7 +17891,7 @@ def _create_credential_tab_content(platform_name, tab_frame):
                 if platform_name == "Apple Music":
                     _am_tooltip_texts = {
                         "language": "Language/locale for Apple Music requests (for example: en-US).",
-                        "wrapper_decrypt_ip": "Base URL of wrapper-v2 (default: 127.0.0.1 on port 80). Do not use port 18080 — that is internal to the container.",
+                        "wrapper_decrypt_ip": "Base URL of wrapper-v2 (default: 127.0.0.1 on port 80). Do not use port 18080 — that is internal to the container. The WV2D decrypt host/port are derived from this URL automatically (TCP port 10020).",
                     }
                     _am_tip = _am_tooltip_texts.get(key)
                     if _am_tip:
