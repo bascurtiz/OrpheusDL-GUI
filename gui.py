@@ -8378,6 +8378,7 @@ def load_settings():
                         "disable_subscription_checks": False,
                         "enable_undesirable_conversions": False,
                         "ignore_existing_files": False,
+                        "reverify_existing_files": False,
                         "ignore_different_artists": True,
                         "hide_ffmpeg_warning": False
                     }
@@ -20156,6 +20157,7 @@ if __name__ == "__main__":
                     "disable_subscription_checks": False,
                     "enable_undesirable_conversions": False,
                     "ignore_existing_files": False,
+                    "reverify_existing_files": False,
                     "ignore_different_artists": True,
                     "hide_ffmpeg_warning": False
                 }
@@ -21224,6 +21226,7 @@ Lossy-to-Lossy
 Lossless-to-Lossy (if not preferred)
 Unnecessary Lossless-to-Lossless""",
             "advanced.ignore_existing_files": "Skips downloading a track only when its exact target file path already exists.\nDifferent album editions (e.g. Standard vs Deluxe) are saved to separate folders when they share a name, so one edition is not left half-skipped because of the other.\nWhen off, existing files at the same path are overwritten.",
+            "advanced.reverify_existing_files": "When skipping existing files is enabled, re-checks each existing file's duration against the expected track duration.\nIf the durations don't match (e.g. a stale or untagged leftover from an older version), the file is removed and re-downloaded so its tags are refreshed.\nFiles whose duration matches are still skipped as usual.",
             "advanced.ignore_different_artists": "When downloading albums, ignore tracks where the artist differs from the main album artist.",
             "advanced.hide_ffmpeg_warning": "Hide the warning message that appears when FFmpeg is not found on the system.",
             "advanced.conversion_flags.aac.audio_bitrate": "Set AAC audio bitrate. Higher is better quality but larger file. Options: 128k, 192k, 256k, 320k.",
