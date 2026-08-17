@@ -11887,6 +11887,7 @@ def patch_download_file_for_cancellation():
                     self._active_tidal_gate = _tidal_gate
                     self._active_tidal_cfg = _tidal_cfg
                     try:
+                        _fallback_start_time = time.time()
                         for i, (track_info, args) in enumerate(zip(track_list, download_args_list)):
                             if _download_cancelled:
                                 print(f"Download cancelled during sequential track {i+1}")
@@ -11904,11 +11905,13 @@ def patch_download_file_for_cancellation():
                         self._active_tidal_cfg = None
                     if _download_cancelled:
                         raise DownloadCancelledError("Download cancelled during sequential track download")
+                    self.total_download_time = time.time() - _fallback_start_time
                     return results
                 from concurrent.futures import ThreadPoolExecutor, as_completed
                 import queue
                 import threading
                 total_tracks = len(track_list)
+                _start_time = time.time()
                 self.print(f"Using {concurrent_downloads} concurrent downloads for {total_tracks} tracks", drop_level=performance_summary_indent)
 
                 from utils.tidal_throttle import (
@@ -12069,6 +12072,7 @@ def patch_download_file_for_cancellation():
                         else:
                             Oprinter._original_oprint(self.oprinter, f"{actual_failed} tracks failed.", drop_level=performance_summary_indent)
 
+                    self.total_download_time = time.time() - _start_time
                     return results
                 finally:
                     self._active_tidal_gate = None
@@ -12919,6 +12923,12 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             print(final_status_message)
         
         print(time_taken_message)
+        if 'downloader' in locals() and downloader is not None:
+            try:
+                # PR #2: end-of-run download summary (counts + errors)
+                downloader.print_download_summary()
+            except Exception:
+                pass
         print("\n")
 
         sys.stdout = original_stdout
