@@ -8353,7 +8353,7 @@ def load_settings():
                     },
                     "qobuz": {
                         "app_id": "798273057",
-                        "app_secret": "05a4851e74ee47fda346f50cfdfc4f09"
+                        "app_secret": "abb21364945c0583309667d13ca3d93a"
 
 
 
@@ -17465,10 +17465,122 @@ def _create_credential_tab_content(platform_name, tab_frame):
                 ent.bind("<FocusOut>", lambda e, w=ent: handle_focus_out(w))
                 ent.bind("<KeyRelease>", lambda e, p="Amazon Music", k=key_name, w=ent: _auto_save_credential_change(p, k, w))
 
+        if platform_name == "Qobuz":
+            qobuz_creds = current_settings.get("credentials", {}).get("Qobuz", {})
+            grid_parent.grid_columnconfigure(1, weight=1)
+            if platform_name not in settings_vars["credentials"]:
+                settings_vars["credentials"][platform_name] = {}
+            sv_qobuz = settings_vars["credentials"]["Qobuz"]
+
+            # Tokens are bound to the app_id they were created with; these are the valid pairs.
+            _qobuz_presets = (
+                ("Created after 2025-05-06", "798273057", "abb21364945c0583309667d13ca3d93a"),
+                ("Created after 2024-08-12", "579939560", "fa31fc13e7a28e7d70bb61e91aa9e178"),
+                ("Created before 2024-08-12", "950096963", "979549437fcc4a3faad4867b5cd25dcb"),
+            )
+
+            var_app_id = tkinter.StringVar(value=str(qobuz_creds.get("app_id") or ""))
+            var_app_secret = tkinter.StringVar(value=str(qobuz_creds.get("app_secret") or ""))
+            var_quality_fmt = tkinter.StringVar(value=str(qobuz_creds.get("quality_format") or DEFAULT_SETTINGS["credentials"]["Qobuz"]["quality_format"]))
+            var_user_id = tkinter.StringVar(value=str(qobuz_creds.get("user_id") or ""))
+            var_auth_token = tkinter.StringVar(value=str(qobuz_creds.get("auth_token") or ""))
+
+            sv_qobuz["app_id"] = var_app_id
+            sv_qobuz["app_secret"] = var_app_secret
+            sv_qobuz["quality_format"] = var_quality_fmt
+            sv_qobuz["user_id"] = var_user_id
+            sv_qobuz["auth_token"] = var_auth_token
+
+            # Determine which preset (if any) matches the saved pair.
+            _cur_aid = var_app_id.get().strip()
+            _cur_sec = var_app_secret.get().strip()
+            _preset_label = "Custom"
+            for _lbl, _aid, _sec in _qobuz_presets:
+                if _cur_aid == _aid and _cur_sec == _sec:
+                    _preset_label = _lbl
+                    break
+            var_token_date = tkinter.StringVar(value=_preset_label)
+
+            ar = 0
+
+            lbl_date = customtkinter.CTkLabel(grid_parent, text="Token creation date")
+            lbl_date.grid(row=ar, column=0, sticky="w", padx=10, pady=(10, 5))
+            date_combo = customtkinter.CTkComboBox(
+                grid_parent,
+                values=[_lbl for _lbl, _, _ in _qobuz_presets] + ["Custom"],
+                variable=var_token_date,
+                state="readonly",
+            )
+            date_combo.grid(row=ar, column=1, sticky="ew", padx=10, pady=(10, 5))
+
+            def _apply_qobuz_preset(choice):
+                for _lbl, _aid, _sec in _qobuz_presets:
+                    if choice == _lbl:
+                        var_app_id.set(_aid)
+                        var_app_secret.set(_sec)
+                        _auto_save_credential_change("Qobuz", "app_id")
+                        return
+
+            date_combo.configure(command=_apply_qobuz_preset)
+            _date_tip = (
+                "Auto-fill App Id / App Secret to match when your Qobuz token was created.\n"
+                "Tokens are bound to the app_id used at creation; the wrong pair returns 401."
+            )
+            CTkToolTip(lbl_date, message=_date_tip, bg_color=TOOLTIP_MENU_BG, text_color=WHITE_TEXT_COLOR, padx=12, pady=12)
+            CTkToolTip(date_combo, message=_date_tip, bg_color=TOOLTIP_MENU_BG, text_color=WHITE_TEXT_COLOR, padx=12, pady=12)
+            ar += 1
+
+            customtkinter.CTkLabel(grid_parent, text="App Id").grid(row=ar, column=0, sticky="w", padx=10, pady=5)
+            ent_app_id = customtkinter.CTkEntry(grid_parent, textvariable=var_app_id)
+            ent_app_id.grid(row=ar, column=1, sticky="ew", padx=10, pady=5)
+            ar += 1
+
+            customtkinter.CTkLabel(grid_parent, text="App Secret").grid(row=ar, column=0, sticky="w", padx=10, pady=5)
+            ent_app_secret = customtkinter.CTkEntry(grid_parent, textvariable=var_app_secret)
+            ent_app_secret.grid(row=ar, column=1, sticky="ew", padx=10, pady=5)
+            ar += 1
+
+            customtkinter.CTkLabel(grid_parent, text=label_mapping["quality_format"]).grid(row=ar, column=0, sticky="w", padx=10, pady=5)
+            ent_qfmt = customtkinter.CTkEntry(grid_parent, textvariable=var_quality_fmt)
+            ent_qfmt.grid(row=ar, column=1, sticky="ew", padx=10, pady=5)
+            ar += 1
+
+            customtkinter.CTkLabel(grid_parent, text=label_mapping["user_id"]).grid(row=ar, column=0, sticky="w", padx=10, pady=5)
+            ent_user_id = customtkinter.CTkEntry(grid_parent, textvariable=var_user_id)
+            ent_user_id.grid(row=ar, column=1, sticky="ew", padx=10, pady=5)
+            ar += 1
+
+            customtkinter.CTkLabel(grid_parent, text=label_mapping["auth_token"]).grid(row=ar, column=0, sticky="w", padx=10, pady=5)
+            ent_token = customtkinter.CTkEntry(grid_parent, textvariable=var_auth_token, show="*")
+            ent_token.grid(row=ar, column=1, sticky="ew", padx=10, pady=5)
+            ar += 1
+
+            for _ent, _k in (
+                (ent_app_id, "app_id"),
+                (ent_app_secret, "app_secret"),
+                (ent_qfmt, "quality_format"),
+                (ent_user_id, "user_id"),
+                (ent_token, "auth_token"),
+            ):
+                _ent.bind("<Button-3>", show_context_menu)
+                _ent.bind("<Button-2>", show_context_menu)
+                _ent.bind("<Control-Button-1>", show_context_menu)
+                _ent.bind("<Control-c>", _handle_ctrl_c_copy)
+                _ent.bind("<Control-C>", _handle_ctrl_c_copy)
+                if _k == "auth_token":
+                    _ent.bind("<FocusIn>", lambda e, w=_ent: _masked_entry_focus_in(w))
+                    _ent.bind("<FocusOut>", lambda e, w=_ent: _masked_entry_focus_out(w))
+                else:
+                    _ent.bind("<FocusIn>", lambda e, w=_ent: handle_focus_in(w))
+                    _ent.bind("<FocusOut>", lambda e, w=_ent: handle_focus_out(w))
+                _ent.bind("<KeyRelease>", lambda e, p="Qobuz", k=_k, w=_ent: _auto_save_credential_change(p, k, w))
+
         for i, (key, value) in enumerate(default_platform_fields.items()):
             if platform_name == "Spotify":
                 continue
             if platform_name == "Amazon Music":
+                continue
+            if platform_name == "Qobuz":
                 continue
             if platform_name == "TIDAL" and key in ["prefer_ac4", "fix_mqa", "throttle"]:
                 continue
@@ -20002,7 +20114,7 @@ if __name__ == "__main__":
                 "Musixmatch": { "token_limit": 10, "lyrics_format": "standard", "custom_time_decimals": False },
                 "Napster": { "api_key": "", "customer_secret": "", "requested_netloc": "", "username": "", "password": "" },
                 "Nugs": { "username": "", "password": "", "client_id": "", "dev_key": "" },
-                "Qobuz": { "app_id": "798273057", "app_secret": "05a4851e74ee47fda346f50cfdfc4f09", "quality_format": "{sample_rate}kHz {bit_depth}bit", "user_id": "", "auth_token": "" },
+                "Qobuz": { "app_id": "798273057", "app_secret": "abb21364945c0583309667d13ca3d93a", "quality_format": "{sample_rate}kHz {bit_depth}bit", "user_id": "", "auth_token": "" },
 
 
 
