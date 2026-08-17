@@ -119,6 +119,39 @@ import traceback
 import tkinter.messagebox
 import shutil
 from CTkToolTip import CTkToolTip
+
+
+def _wrap_tooltip_sentences(message):
+    """Break tooltip text into one sentence per line so it never stretches ultra-wide."""
+    if not isinstance(message, str) or not message.strip():
+        return message
+    sentinel = "\u0000"
+    protected = message
+    # Keep abbreviation periods from being mistaken for sentence boundaries.
+    for _abbr in ("e.g.", "i.e.", "etc.", "vs.", "approx.", "..."):
+        protected = protected.replace(_abbr, _abbr.replace(".", sentinel))
+    _lines = []
+    for _chunk in protected.split("\n"):
+        _chunk = _chunk.strip()
+        if not _chunk:
+            continue
+        for _part in re.split(r"(?<=[.!?])\s+", _chunk):
+            _part = _part.strip().replace(sentinel, ".")
+            if _part:
+                _lines.append(_part)
+    return "\n".join(_lines)
+
+
+_CTkToolTip_original_init = CTkToolTip.__init__
+
+
+def _CTkToolTip_wrapped_init(self, widget=None, message=None, **kwargs):
+    # No artificial width cap: text only breaks at sentence boundaries (see _wrap_tooltip_sentences).
+    _CTkToolTip_original_init(self, widget, message=_wrap_tooltip_sentences(message), **kwargs)
+
+
+CTkToolTip.__init__ = _CTkToolTip_wrapped_init
+
 from PIL import Image, ImageDraw, ImageTk
 from pathlib import Path
 from tkinter import ttk
@@ -8271,13 +8304,14 @@ def load_settings():
                         "download_path": "./downloads",
                         "download_quality": "hifi",
                         "disable_subscription_check": False,
-                        "create_service_folder": False
+                        "create_platform_folder": False
                     },
                     "formatting": {
                         "discography_format": "{name} {quality}",
                         "album_format": "{artist}/{name}",
                         "playlist_format": "{name}",
                         "track_filename_format": "{track_number}. {artist} - {name}",
+                        "playlist_track_filename_format": "",
                         "single_full_path_format": "{artist} - {name}",
                         "metadata_separator": ", ",
                         "filename_separator": "",
@@ -8408,7 +8442,7 @@ def load_settings():
                 if "throttle_pause_seconds" in orpheus_general:
                     try: settings["globals"]["general"]["throttle_pause_seconds"] = int(orpheus_general["throttle_pause_seconds"])
                     except (TypeError, ValueError): pass
-                if "create_service_folder" in orpheus_general: settings["globals"]["general"]["create_service_folder"] = bool(orpheus_general["create_service_folder"])
+                if "create_platform_folder" in orpheus_general: settings["globals"]["general"]["create_platform_folder"] = bool(orpheus_general["create_platform_folder"])
                 # Migrate legacy quality=atmos → hifi + Include Dolby Atmos
                 _q = str(settings["globals"]["general"].get("quality", "") or "").lower()
                 if _q == "atmos":
@@ -8857,7 +8891,7 @@ def save_settings(show_confirmation: bool = True):
          return False
     mapped_orpheus_updates = { "global": {"general": {},"formatting": {},"codecs": {},"covers": {},"playlist": {},"advanced": {},"module_defaults": {},"artist_downloading": {},"lyrics": {}}, "modules": {} }
     gui_globals = updated_gui_settings.get("globals", {})
-    general_map_gui_to_orpheus = { "output_path": "download_path", "quality": "download_quality", "search_limit": "search_limit", "disabled_search_platforms": "disabled_search_platforms", "concurrent_downloads": "concurrent_downloads", "play_sound_on_finish": "play_sound_on_finish", "min_file_size_kb": "min_file_size_kb", "minimize_to_tray": "minimize_to_tray", "throttle_batch_size": "throttle_batch_size", "throttle_pause_seconds": "throttle_pause_seconds", "create_service_folder": "create_service_folder" }
+    general_map_gui_to_orpheus = { "output_path": "download_path", "quality": "download_quality", "search_limit": "search_limit", "disabled_search_platforms": "disabled_search_platforms", "concurrent_downloads": "concurrent_downloads", "play_sound_on_finish": "play_sound_on_finish", "min_file_size_kb": "min_file_size_kb", "minimize_to_tray": "minimize_to_tray", "throttle_batch_size": "throttle_batch_size", "throttle_pause_seconds": "throttle_pause_seconds", "create_platform_folder": "create_platform_folder" }
     if "general" in gui_globals:
         gui_general_section = gui_globals["general"]
         if "general" not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"]["general"] = {}
@@ -20069,7 +20103,7 @@ if __name__ == "__main__":
                     "minimize_to_tray": False,
                     "throttle_batch_size": 0,
                     "throttle_pause_seconds": 30,
-                    "create_service_folder": False,
+                    "create_platform_folder": False,
                 },
                 "artist_downloading": {
                     "return_credited_albums": True,
@@ -20077,7 +20111,7 @@ if __name__ == "__main__":
                     "prefer_highest_quality_edition": True,
                     "explicit_content": "prefer_explicit",
                 },
-                "formatting": { "discography_format": "{name} {quality}", "album_format": "{artist}/{name}", "playlist_format": "{name}", "track_filename_format": "{track_number}. {artist} - {name}", "single_full_path_format": "{artist} - {name}", "metadata_separator": ", ", "filename_separator": "", "split_metadata": False, "enable_zfill": True, "force_album_format": False, "use_playlist_position": False, "use_album_position": False },
+                "formatting": { "discography_format": "{name} {quality}", "album_format": "{artist}/{name}", "playlist_format": "{name}", "track_filename_format": "{track_number}. {artist} - {name}", "playlist_track_filename_format": "", "single_full_path_format": "{artist} - {name}", "metadata_separator": ", ", "filename_separator": "", "split_metadata": False, "enable_zfill": True, "force_album_format": False, "use_playlist_position": False, "use_album_position": False },
                 "codecs": {
                     "proprietary_codecs": False,
                     "spatial_codecs": True,
@@ -21104,7 +21138,7 @@ if __name__ == "__main__":
             "general.minimize_to_tray": "When closing the window, hide to the system tray (notification area) instead of quitting.\nLeft-click or choose Show to restore; choose Exit on the tray menu to quit fully.\nUseful for keeping downloads running in the background.",
             "general.throttle_batch_size": "How many tracks to download before pausing (batch size).\nSet to 0 to disable batch throttling.\nExample: 50 downloads 50 tracks, pauses, then continues — useful for large playlists (e.g. Qobuz) to reduce rate limiting.",
             "general.throttle_pause_seconds": "How long to pause (in seconds) between batches when Throttle Batch Size is greater than 0.\nExample: batch size 50 and pause 30 → download 50 tracks, wait 30 seconds, repeat.",
-            "general.create_service_folder": "Create a top-level folder named after the streaming service inside your download path (e.g. downloads/Apple Music/... or downloads/Qobuz/...).\nOff (default): everything goes directly into the download path using your formatting templates.",
+            "general.create_platform_folder": "Create a top-level folder named after the streaming platform inside your download path (e.g. downloads/Apple Music/... or downloads/Qobuz/...).\nOff (default): everything goes directly into the download path using your formatting templates.",
             "artist_downloading.return_credited_albums": "Include albums where the artist is credited but not the main artist.",
             "artist_downloading.separate_tracks_skip_downloaded": "When downloading artists, skip tracks that are part of albums already downloaded.",
             "artist_downloading.prefer_highest_quality_edition": "When downloading an artist/label discography, group duplicate editions of the same album and download only the highest-priority version (Hi-Res > FLAC > Atmos if enabled).\nDisable to download every listed edition.",
@@ -21113,15 +21147,16 @@ if __name__ == "__main__":
             "formatting.album_format": """Folder structure for albums. Variables:
  {artist}, {artist_id}, {artist_initials}, {album_artist}, {name}
  {id}, {label}, {catalog_number}, {release_year}
- {upc}, {explicit}, {quality}""",
+ {upc}, {explicit}, {quality}, {platform}""",
             "formatting.playlist_format": """Folder structure for playlists. Variables:
  {creator}, {creator_id}
  {name}, {tracks}
- {release_year}, {explicit}""",
+ {release_year}, {explicit}, {platform}""",
             "formatting.track_filename_format": """Filename format for tracks. Variables:
  {artist}, {artist_id}, {artist_initials}, {album_artist}, {name}, {album}
  {track_number}, {total_tracks}, {disc_number}, {total_discs}, {playlist_position}
- {id}, {album_id}, {label}, {catalog_number}, {isrc}, {release_year}, {explicit}, {quality}""",
+ {id}, {album_id}, {label}, {catalog_number}, {isrc}, {release_year}, {explicit}, {quality}, {platform}""",
+            "formatting.playlist_track_filename_format": """Filename format for tracks downloaded as part of a playlist.\nLeave empty to use Track Filename Format.\nUse this to omit {track_number} in playlists while keeping it in album downloads.""",
             "formatting.single_full_path_format": """Full path format (folder + filename) for single tracks not part of an album download.\nUses same variables as Track Filename Format.""",
             "formatting.metadata_separator": "Character or string used when multiple values are joined into embedded tags (artists, genres, album artist, credits). Default is `, ` (comma).\nOnly applies when Split metadata is off, or for fields always stored as one string (e.g. album artist).\nWindows Explorer Properties may still show ; between multiple artists—that is fixed Windows UI behavior, not this setting.",
             "formatting.filename_separator": "Character or string used when joining multiple values in filename/path templates ({artist}, {album_artist}, {genres}, etc.).\nLeave empty to use Metadata separator. Example: set , here and ; under Metadata separator for comma paths and semicolon tags.",
@@ -21174,6 +21209,81 @@ Unnecessary Lossless-to-Lossless""",
             "advanced.conversion_flags.flac.compression_level": "Set FLAC compression level (0-8). Higher level means smaller file but slower encoding, 0 is fastest, 8 is smallest.",
             "advanced.conversion_flags.opus.b:a": "Set OPUS audio bitrate. Higher is better quality but larger file. Options: 64k, 96k, 128k, 160k, 192k, 256k, 320k."
         }
+
+        _album_template_vars = (
+            "{name} — album name\n{album_artist} — album artist\n{artist} — primary artist\n"
+            "{artist_id} — artist id\n{artist_initials} — artist initials\n{id} — album id\n"
+            "{label} — record label\n{catalog_number} — catalog number\n{release_year} — release year\n"
+            "{upc} — UPC/barcode\n{explicit} — explicit marker\n{quality} — quality badge\n{platform} — streaming platform name"
+        )
+        _track_template_vars = (
+            "{artist} — track artist\n{album_artist} — album artist\n{name} — track name\n{album} — album name\n"
+            "{track_number} — track number\n{total_tracks} — total tracks\n{disc_number} — disc number\n"
+            "{total_discs} — total discs\n{playlist_position} — playlist position\n{id} — track id\n"
+            "{album_id} — album id\n{label} — record label\n{catalog_number} — catalog number\n"
+            "{isrc} — ISRC\n{release_year} — release year\n{explicit} — explicit marker\n{quality} — quality badge\n{platform} — streaming platform name"
+        )
+        TEMPLATE_VARIABLES = {
+            "formatting.discography_format": _album_template_vars,
+            "formatting.album_format": _album_template_vars,
+            "formatting.playlist_format": (
+                "{creator} — playlist creator\n{creator_id} — creator id\n{name} — playlist name\n"
+                "{tracks} — track count\n{release_year} — release year\n{explicit} — explicit marker\n{platform} — streaming platform name"
+            ),
+            "formatting.track_filename_format": _track_template_vars,
+            "formatting.playlist_track_filename_format": _track_template_vars,
+            "formatting.single_full_path_format": _track_template_vars,
+        }
+
+        def _add_template_variables_toggle(parent, row, full_key):
+            """Render a collapsible 'Available variables' hint under a formatting field."""
+            text = TEMPLATE_VARIABLES.get(full_key)
+            if not text:
+                return
+            container = customtkinter.CTkFrame(parent, fg_color="transparent")
+            container.grid(row=row, column=1, columnspan=2, sticky="ew", padx=(10, 5), pady=(0, 6))
+            container.grid_columnconfigure(0, weight=1)
+            _open = {"open": False}
+            toggle = customtkinter.CTkLabel(
+                container,
+                text="▸ Available variables",
+                text_color=LINK_COLOR,
+                cursor=HAND_CURSOR_LINK,
+                anchor="w",
+                font=("Segoe UI", 11),
+            )
+            toggle.pack(anchor="w")
+            details_frame = customtkinter.CTkFrame(container, fg_color="transparent")
+            for _line in text.split("\n"):
+                if not _line.strip():
+                    continue
+                _row = customtkinter.CTkFrame(details_frame, fg_color="transparent")
+                _row.pack(anchor="w", fill="x")
+                if " — " in _line:
+                    _var_part, _desc_part = _line.split(" — ", 1)
+                else:
+                    _var_part, _desc_part = _line, ""
+                customtkinter.CTkLabel(
+                    _row, text=_var_part, text_color=PURE_WHITE_TEXT_COLOR,
+                    font=("Consolas", 10), anchor="w",
+                ).pack(side="left")
+                if _desc_part:
+                    customtkinter.CTkLabel(
+                        _row, text=" — " + _desc_part, text_color=GRAY_TEXT_COLOR,
+                        font=("Consolas", 10), anchor="w",
+                    ).pack(side="left")
+            def _toggle(_event=None):
+                _open["open"] = not _open["open"]
+                if _open["open"]:
+                    toggle.configure(text="▾ Available variables")
+                    details_frame.pack(anchor="w", pady=(5, 0), fill="x")
+                else:
+                    toggle.configure(text="▸ Available variables")
+                    details_frame.pack_forget()
+            toggle.bind("<Button-1>", _toggle)
+            toggle.bind("<Enter>", lambda e: toggle.configure(text_color=LINK_HOVER_COLOR))
+            toggle.bind("<Leave>", lambda e: toggle.configure(text_color=LINK_COLOR))
+
         for section_key, section_value in DEFAULT_SETTINGS["globals"].items():
             if isinstance(section_value, dict):
                 customtkinter.CTkLabel(global_settings_frame, text=section_key.replace("_", " ").upper(), text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11)).grid(row=row, column=0, columnspan=3, sticky="w", padx=(0, 10), pady=(10, 5)); row += 1
@@ -21708,7 +21818,11 @@ Unnecessary Lossless-to-Lossless""",
                          if 'label_widget' in locals() and label_widget:
                               CTkToolTip(label_widget, message=tooltip_text, bg_color=TOOLTIP_MENU_BG, text_color=WHITE_TEXT_COLOR, padx=12, pady=12)
 
-                    row += 1
+                    if full_key in TEMPLATE_VARIABLES:
+                        _add_template_variables_toggle(global_settings_frame, row + 1, full_key)
+                        row += 2
+                    else:
+                        row += 1
         credential_keys_for_settings_tabs = [pk for pk in installed_platform_keys if pk not in ["Musixmatch", "LRCLIB"]]        
         
         sorted_platform_keys_for_tabs = sorted(credential_keys_for_settings_tabs)
