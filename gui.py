@@ -8270,7 +8270,8 @@ def load_settings():
                     "general": {
                         "download_path": "./downloads",
                         "download_quality": "hifi",
-                        "disable_subscription_check": False
+                        "disable_subscription_check": False,
+                        "create_service_folder": False
                     },
                     "formatting": {
                         "discography_format": "{name} {quality}",
@@ -8407,6 +8408,7 @@ def load_settings():
                 if "throttle_pause_seconds" in orpheus_general:
                     try: settings["globals"]["general"]["throttle_pause_seconds"] = int(orpheus_general["throttle_pause_seconds"])
                     except (TypeError, ValueError): pass
+                if "create_service_folder" in orpheus_general: settings["globals"]["general"]["create_service_folder"] = bool(orpheus_general["create_service_folder"])
                 # Migrate legacy quality=atmos → hifi + Include Dolby Atmos
                 _q = str(settings["globals"]["general"].get("quality", "") or "").lower()
                 if _q == "atmos":
@@ -8855,7 +8857,7 @@ def save_settings(show_confirmation: bool = True):
          return False
     mapped_orpheus_updates = { "global": {"general": {},"formatting": {},"codecs": {},"covers": {},"playlist": {},"advanced": {},"module_defaults": {},"artist_downloading": {},"lyrics": {}}, "modules": {} }
     gui_globals = updated_gui_settings.get("globals", {})
-    general_map_gui_to_orpheus = { "output_path": "download_path", "quality": "download_quality", "search_limit": "search_limit", "disabled_search_platforms": "disabled_search_platforms", "concurrent_downloads": "concurrent_downloads", "play_sound_on_finish": "play_sound_on_finish", "min_file_size_kb": "min_file_size_kb", "minimize_to_tray": "minimize_to_tray", "throttle_batch_size": "throttle_batch_size", "throttle_pause_seconds": "throttle_pause_seconds" }
+    general_map_gui_to_orpheus = { "output_path": "download_path", "quality": "download_quality", "search_limit": "search_limit", "disabled_search_platforms": "disabled_search_platforms", "concurrent_downloads": "concurrent_downloads", "play_sound_on_finish": "play_sound_on_finish", "min_file_size_kb": "min_file_size_kb", "minimize_to_tray": "minimize_to_tray", "throttle_batch_size": "throttle_batch_size", "throttle_pause_seconds": "throttle_pause_seconds", "create_service_folder": "create_service_folder" }
     if "general" in gui_globals:
         gui_general_section = gui_globals["general"]
         if "general" not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"]["general"] = {}
@@ -17950,7 +17952,7 @@ def _create_credential_tab_content(platform_name, tab_frame):
                 var = tkinter.StringVar(value=str(current_value))
                 widget = customtkinter.CTkEntry(grid_parent)
                 widget.configure(textvariable=var)
-                _is_masked_field = key in ("password", "auth_token") or (key == "web_access_token" and platform_name == "SoundCloud")
+                _is_masked_field = key in ("password", "auth_token") or (key == "web_access_token" and platform_name == "SoundCloud") or (key == "media_user_token" and platform_name == "Apple Music")
                 if _is_masked_field:
                     widget.configure(show="*")
                 
@@ -18003,6 +18005,7 @@ def _create_credential_tab_content(platform_name, tab_frame):
                 if platform_name == "Apple Music":
                     _am_tooltip_texts = {
                         "language": "Language/locale for Apple Music requests (for example: en-US).",
+                        "media_user_token": "Optional: paste the 'media-user-token' cookie value from music.apple.com (DevTools → Application → Cookies) instead of exporting a cookies.txt file. Enables AAC downloads, lyrics and videos with an active subscription.",
                         "wrapper_decrypt_ip": "Base URL of wrapper-v2 (default: 127.0.0.1 on port 80). Do not use port 18080 — that is internal to the container. The WV2D decrypt host/port are derived from this URL automatically (TCP port 10020).",
                     }
                     _am_tip = _am_tooltip_texts.get(key)
@@ -20066,6 +20069,7 @@ if __name__ == "__main__":
                     "minimize_to_tray": False,
                     "throttle_batch_size": 0,
                     "throttle_pause_seconds": 30,
+                    "create_service_folder": False,
                 },
                 "artist_downloading": {
                     "return_credited_albums": True,
@@ -20104,7 +20108,7 @@ if __name__ == "__main__":
                 }
             },
             "credentials": {
-                "Apple Music": { "cookies_path": "./config/cookies.txt", "language": "en-US", "use_wrapper": False, "wrapper_decrypt_ip": "127.0.0.1" },
+                "Apple Music": { "cookies_path": "./config/cookies.txt", "language": "en-US", "use_wrapper": False, "media_user_token": "", "wrapper_decrypt_ip": "127.0.0.1" },
                 "Beatport": { "username": "", "password": "" },
                 "Beatsource": { "username": "", "password": "" },
                 "Bugs": { "username": "", "password": "" },
@@ -21100,6 +21104,7 @@ if __name__ == "__main__":
             "general.minimize_to_tray": "When closing the window, hide to the system tray (notification area) instead of quitting.\nLeft-click or choose Show to restore; choose Exit on the tray menu to quit fully.\nUseful for keeping downloads running in the background.",
             "general.throttle_batch_size": "How many tracks to download before pausing (batch size).\nSet to 0 to disable batch throttling.\nExample: 50 downloads 50 tracks, pauses, then continues — useful for large playlists (e.g. Qobuz) to reduce rate limiting.",
             "general.throttle_pause_seconds": "How long to pause (in seconds) between batches when Throttle Batch Size is greater than 0.\nExample: batch size 50 and pause 30 → download 50 tracks, wait 30 seconds, repeat.",
+            "general.create_service_folder": "Create a top-level folder named after the streaming service inside your download path (e.g. downloads/Apple Music/... or downloads/Qobuz/...).\nOff (default): everything goes directly into the download path using your formatting templates.",
             "artist_downloading.return_credited_albums": "Include albums where the artist is credited but not the main artist.",
             "artist_downloading.separate_tracks_skip_downloaded": "When downloading artists, skip tracks that are part of albums already downloaded.",
             "artist_downloading.prefer_highest_quality_edition": "When downloading an artist/label discography, group duplicate editions of the same album and download only the highest-priority version (Hi-Res > FLAC > Atmos if enabled).\nDisable to download every listed edition.",
