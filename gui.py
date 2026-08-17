@@ -14793,6 +14793,18 @@ def _create_search_context_menu():
         separator = customtkinter.CTkFrame(_search_context_menu, width=80, height=1, fg_color=SEPARATOR_COLOR)
         separator.pack(fill="x", padx=12, pady=4)
         
+        # Small hint: the chosen quality applies to this download only and does not
+        # change the saved default quality in Settings → Global.
+        quality_hint_label = customtkinter.CTkLabel(
+            _search_context_menu,
+            text="Quality (this download only)",
+            font=("Segoe UI", 9),
+            text_color=MUTE_TEXT_COLOR,
+            cursor="arrow",
+            anchor="w"
+        )
+        quality_hint_label.pack(fill="x", padx=10, pady=(2, 0))
+        
         # Quality options as buttons (like a submenu)
         # Create 4 buttons to support platforms like TIDAL that have 4 quality tiers
         _search_context_quality_var = tkinter.StringVar(value="hifi")
@@ -14881,16 +14893,18 @@ def _select_quality_and_download(quality_value):
                     item['extra_kwargs'] = {}
                 item['extra_kwargs']['song_codec'] = am_codec
 
-        # Update the global quality setting
-        if 'settings_vars' in globals() and settings_vars:
-            quality_var = settings_vars.get("globals", {}).get("general.quality")
-            if quality_value == 'atmos':
-                # Atmos is not a persistent stream tier — enable Atmos include for discography,
-                # and pass a one-shot override for this download.
-                for item in selected_items:
-                    if 'extra_kwargs' not in item:
-                        item['extra_kwargs'] = {}
-                    item['extra_kwargs']['download_quality_override'] = 'atmos'
+        # One-shot quality override: apply the chosen tier to THIS download only.
+        # We deliberately do NOT write it to the global quality setting, so a per-download
+        # choice (e.g. picking "ALAC" because the selected album only advertises Lossless)
+        # can't silently downgrade the user's saved default quality.
+        if quality_value == 'atmos':
+            # Atmos is not a persistent stream tier — enable Atmos include for discography,
+            # and pass a one-shot override for this download.
+            for item in selected_items:
+                if 'extra_kwargs' not in item:
+                    item['extra_kwargs'] = {}
+                item['extra_kwargs']['download_quality_override'] = 'atmos'
+            if 'settings_vars' in globals() and settings_vars:
                 atmos_var = settings_vars.get("globals", {}).get("codecs.include_dolby_atmos")
                 if atmos_var is not None:
                     try:
@@ -14903,16 +14917,17 @@ def _select_quality_and_download(quality_value):
                         spatial_var.set(True)
                     except Exception:
                         pass
-                if current_settings and isinstance(current_settings, dict):
-                    current_settings.setdefault("globals", {}).setdefault("codecs", {})["include_dolby_atmos"] = True
-                    current_settings["globals"]["codecs"]["spatial_codecs"] = True
-                print("Atmos selected for this download; Include Dolby Atmos enabled")
-                save_settings(show_confirmation=False)
-            elif quality_var and isinstance(quality_var, tkinter.StringVar):
-                quality_var.set(quality_value)
-                print(f"Quality set to: {quality_value}")
-                # Auto-save the setting
-                save_settings(show_confirmation=False)
+            if current_settings and isinstance(current_settings, dict):
+                current_settings.setdefault("globals", {}).setdefault("codecs", {})["include_dolby_atmos"] = True
+                current_settings["globals"]["codecs"]["spatial_codecs"] = True
+            print("Atmos selected for this download; Include Dolby Atmos enabled")
+            save_settings(show_confirmation=False)
+        else:
+            for item in selected_items:
+                if 'extra_kwargs' not in item:
+                    item['extra_kwargs'] = {}
+                item['extra_kwargs']['download_quality_override'] = str(quality_value or '').lower()
+            print(f"Quality override for this download: {quality_value}")
         
         # Start download
         download_selected()
@@ -16844,6 +16859,7 @@ def _to_small_caps(s):
     keywords = [
         "ATMOS",
         "HI-RES",
+        "Lossless",
         "3D MPEG-H Audio",
         "360 Reality Audio",
         "FLAC",
