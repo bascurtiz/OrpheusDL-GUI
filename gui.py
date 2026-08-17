@@ -8318,6 +8318,7 @@ def load_settings():
                         "split_metadata": False,
                         "enable_zfill": True,
                         "force_album_format": False,
+                        "use_album_artist_for_discography": False,
                         "use_playlist_position": False,
                         "use_album_position": False,
                         "truncate_length": 40
@@ -8331,6 +8332,7 @@ def load_settings():
                         "return_credited_albums": True,
                         "separate_tracks_skip_downloaded": True,
                         "prefer_highest_quality_edition": True,
+                        "merge_same_name_albums": False,
                         "explicit_content": "prefer_explicit",
                     },
                     "advanced": {
@@ -20125,9 +20127,10 @@ if __name__ == "__main__":
                     "return_credited_albums": True,
                     "separate_tracks_skip_downloaded": True,
                     "prefer_highest_quality_edition": True,
+                    "merge_same_name_albums": False,
                     "explicit_content": "prefer_explicit",
                 },
-                "formatting": { "discography_format": "{name} {quality}", "album_format": "{artist}/{name}", "playlist_format": "{name}", "track_filename_format": "{track_number}. {artist} - {name}", "playlist_track_filename_format": "", "single_full_path_format": "{artist} - {name}", "metadata_separator": ", ", "filename_separator": "", "split_metadata": False, "enable_zfill": True, "force_album_format": False, "use_playlist_position": False, "use_album_position": False },
+                "formatting": { "discography_format": "{name} {quality}", "album_format": "{artist}/{name}", "playlist_format": "{name}", "track_filename_format": "{track_number}. {artist} - {name}", "playlist_track_filename_format": "", "single_full_path_format": "{artist} - {name}", "metadata_separator": ", ", "filename_separator": "", "split_metadata": False, "enable_zfill": True, "force_album_format": False, "use_album_artist_for_discography": False, "use_playlist_position": False, "use_album_position": False },
                 "codecs": {
                     "proprietary_codecs": False,
                     "spatial_codecs": True,
@@ -21158,6 +21161,7 @@ if __name__ == "__main__":
             "artist_downloading.return_credited_albums": "Include albums where the artist is credited but not the main artist.",
             "artist_downloading.separate_tracks_skip_downloaded": "When downloading artists, skip tracks that are part of albums already downloaded.",
             "artist_downloading.prefer_highest_quality_edition": "When downloading an artist/label discography, group duplicate editions of the same album and download only the highest-priority version (Hi-Res > FLAC > Atmos if enabled).\nDisable to download every listed edition.",
+            "artist_downloading.merge_same_name_albums": "When downloading an artist/label discography, merge editions of the same album that share the same quality into one folder instead of creating duplicate folders with [FLAC]/[FLAC]-style suffixes.\nTracks that already exist are kept and same-named tracks with a different duration are renamed (e.g. Track (2)).\nOff (default): each edition gets its own folder.",
             "artist_downloading.explicit_content": "How to handle explicit vs clean editions during discography downloads:\n• prefer_explicit — prefer explicit when both exist; otherwise take whatever is available\n• non_explicit_only — download only clean versions; skip if only explicit exists\n• both — download explicit and clean editions when both exist",
             "formatting.discography_format": """Album folders inside artist/label discography downloads.\nSame variables as Album Format. Use {name} if album_format already has {artist}.\nAdd {quality} for multiple editions (e.g. {name} {quality}); collisions are auto-disambiguated with a version or ID suffix.""",
             "formatting.album_format": """Folder structure for albums. Variables:
@@ -21179,6 +21183,7 @@ if __name__ == "__main__":
             "formatting.split_metadata": "Save multiple values (e.g., multiple artists) as separate tags instead of one joined string.\nOn: Metadata separator is not used for those tag fields; Windows Properties still shows ; between names; MediaInfo may show your separator or separate values.\nOff (default): one joined string in the tag using Metadata separator (comma, etc.)—closer match in some apps, but fewer apps can treat each artist separately.",
             "formatting.enable_zfill": "Pads track/disc numbers with leading zeros (e.g., 01, 02) in filenames and embedded tags.\nRequires {track_number} or {disc_number} in Track Filename Format. Minimum two digits; wider padding for albums with 100+ tracks.",
             "formatting.force_album_format": "Use the album_format structure even for single track downloads.",
+            "formatting.use_album_artist_for_discography": "During artist/label discography downloads, place collaboration albums under a folder named after the album's actual artist instead of the discography artist.\ne.g. Shakira/Don't You Worry/ → Black Eyed Peas/Don't You Worry/.\nWorks regardless of the discography/album format template.",
             "formatting.use_playlist_position": "Use track's position in the playlist for {track_number} in filenames and tags (instead of the original album track number).\nUse {playlist_position} in filename template if you want playlist order without changing album track numbers.",
             "formatting.use_album_position": "Use sequential album-wide track numbers for {track_number} in filenames and tags (1 through total album tracks), ignoring per-disc resets.\nLeave disabled to keep each disc numbered from 1 (recommended for multi-disc albums).",
             "codecs.proprietary_codecs": "Enable potentially proprietary codecs like MQA (if supported by module).",
