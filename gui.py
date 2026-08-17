@@ -21167,7 +21167,7 @@ if __name__ == "__main__":
             "formatting.use_album_position": "Use sequential album-wide track numbers for {track_number} in filenames and tags (1 through total album tracks), ignoring per-disc resets.\nLeave disabled to keep each disc numbered from 1 (recommended for multi-disc albums).",
             "codecs.proprietary_codecs": "Enable potentially proprietary codecs like MQA (if supported by module).",
             "codecs.spatial_codecs": "Enable decoding of spatial audio codecs (required to actually download Dolby Atmos streams).",
-            "codecs.include_dolby_atmos": "Include Dolby Atmos editions when choosing among duplicate releases in a discography.\nWhen off, Atmos editions are skipped (Atmos-only albums are skipped entirely).\nWhen on, Atmos ranks below Hi-Res and FLAC.",
+            "codecs.include_dolby_atmos": "Include Dolby Atmos editions when choosing among duplicate releases in a discography.\nOnly takes effect when the download quality is set to Atmos.\nWhen on, Atmos editions rank below Hi-Res and FLAC.",
             "module_defaults.lyrics": "Default provider for lyrics when the source platform does not return usable lyrics.\nUse 'default' to auto-pick the best available lyrics module.",
             "module_defaults.covers": "Default provider for cover art when the source platform image is missing/low quality.\nUse 'default' to auto-pick the best available cover module.",
             "module_defaults.credits": "Default provider for track credits when credits are missing from the source platform.\nUse 'default' to auto-pick the best available credits module.",
