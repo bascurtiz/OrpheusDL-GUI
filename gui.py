@@ -12519,6 +12519,13 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             _gui_q = _gen.get("quality") or _gen.get("download_quality")
             if isinstance(_gui_q, str) and _gui_q.strip():
                 downloader_settings.setdefault("general", {})["download_quality"] = _gui_q.strip().lower()
+            # Same lag concern applies to the platform-folder toggle: current_settings is authoritative.
+            _gui_platform_folder = _gen.get("create_platform_folder")
+            if isinstance(_gui_platform_folder, bool):
+                downloader_settings.setdefault("general", {})["create_platform_folder"] = _gui_platform_folder
+            elif isinstance(_gui_platform_folder, str) and _gui_platform_folder.strip():
+                downloader_settings.setdefault("general", {})["create_platform_folder"] = \
+                    _gui_platform_folder.strip().lower() in ("true", "1", "yes", "on")
 
         # One-shot quality override from search context menu (e.g. Atmos for a single item)
         if search_result_data and isinstance(search_result_data, dict):
@@ -12727,7 +12734,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                             downloader.download_track,
                             stop_event,
                             track_id=str(media_id),
-                            album_location=output_path,
+                            album_location='',
                             extra_kwargs=getattr(downloader, 'extra_kwargs', {})
                         )
                         yield_to_gui()
