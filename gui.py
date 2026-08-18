@@ -12484,6 +12484,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                     "play_sound_on_finish": fresh_section.get("play_sound_on_finish", default_section.get("play_sound_on_finish", False)),
                     "throttle_batch_size": fresh_section.get("throttle_batch_size", default_section.get("throttle_batch_size", 0)),
                     "throttle_pause_seconds": fresh_section.get("throttle_pause_seconds", default_section.get("throttle_pause_seconds", 30)),
+                    "create_platform_folder": fresh_section.get("create_platform_folder", default_section.get("create_platform_folder", False)),
                     "progress_bar": False,
                 }
                 # GUI log uses its own layout; disable tqdm bars so they do not pad lines before status text.
@@ -12726,7 +12727,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                             downloader.download_track,
                             stop_event,
                             track_id=str(media_id),
-                            album_location=output_path + '/',
+                            album_location=output_path,
                             extra_kwargs=getattr(downloader, 'extra_kwargs', {})
                         )
                         yield_to_gui()
@@ -12777,7 +12778,6 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                                 downloader.download_album,
                                 stop_event,
                                 media_id,
-                                path=output_path,
                                 extra_kwargs=downloader.extra_kwargs
                             )
                         else:
@@ -12786,7 +12786,6 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                                 downloader.download_album,
                                 stop_event,
                                 media_id,
-                                path=output_path,
                                 extra_kwargs=extra_kwargs
                             )
                         yield_to_gui()
@@ -19873,76 +19872,6 @@ def final_download_cleanup(success=False):
         print(f"Error in download cleanup: {e}")
         download_process_active = False
         set_ui_state_downloading(False)
-
-def run_download_in_thread_responsive(orpheus, url, output_path, gui_settings, search_result_data=None):
-    """Runs the download with aggressive yielding to keep GUI responsive."""
-    global output_queue, stop_event, app, download_process_active, DEFAULT_SETTINGS, _queue_log_handler_instance
-    import time
-    
-    if _queue_log_handler_instance:
-        _queue_log_handler_instance.reset_ffmpeg_state_for_current_download()
-
-    if orpheus is None:
-        logging.error("Orpheus instance not available. Cannot start download.")
-        try:
-            if 'app' in globals() and app and app.winfo_exists():
-                 app.after(0, lambda: set_ui_state_downloading(False))
-        except NameError: pass
-        except Exception as e: logging.error(f"Error scheduling UI reset after Orpheus instance error: {e}")
-        return
-    def yield_to_gui(duration=0.001):
-        time.sleep(duration)
-        if 'app' in globals() and app:
-            try:
-                app.update_idletasks()
-            except:
-                pass
-
-    original_stdout = sys.stdout
-    original_stderr = sys.stderr
-    dummy_stderr = DummyStderr()
-    is_cancelled = False
-    download_exception_occurred = False
-    start_time = datetime.datetime.now()
-    media_type = None
-    yield_to_gui(0.01)
-
-    try:
-        queue_writer = QueueWriter(output_queue, media_type=media_type)
-        sys.stdout = queue_writer
-        sys.stderr = dummy_stderr
-        yield_to_gui()
-        fresh_orpheus_settings = orpheus.settings
-        downloader_settings = {
-            "general": {
-                "download_path": fresh_orpheus_settings.get("globals", {}).get("general", {}).get("output_path", DEFAULT_SETTINGS["globals"]["general"]["output_path"]),
-                "download_quality": fresh_orpheus_settings.get("globals", {}).get("general", {}).get("quality", DEFAULT_SETTINGS["globals"]["general"]["quality"]),
-                "search_limit": fresh_orpheus_settings.get("globals", {}).get("general", {}).get("search_limit", DEFAULT_SETTINGS["globals"]["general"]["search_limit"]),
-                "progress_bar": False
-            },
-            **{k: v for k, v in fresh_orpheus_settings.get("globals", {}).items() if k != "general"}
-        }
-        
-        yield_to_gui()
-        def yielding_download():
-            return run_download_in_thread(orpheus, url, output_path, fresh_orpheus_settings, search_result_data)
-        download_result = yielding_download()
-        
-    except Exception as e:
-        print(f"Error in responsive download: {e}")
-    finally:
-        sys.stdout = original_stdout
-        sys.stderr = original_stderr
-        def final_cleanup():
-            global download_process_active
-            download_process_active = False
-            set_ui_state_downloading(False)
-        
-        try:
-            if 'app' in globals() and app and app.winfo_exists():
-                app.after(0, final_cleanup)
-        except:
-            final_cleanup()
 
 def _auto_save_credential_change(platform_name, key, widget=None, *args):
     """Callback to save settings when a credential value changes."""
