@@ -108,6 +108,7 @@ import platform
 import time
 import queue
 import re
+import string
 import requests
 import subprocess
 import sys
@@ -8672,6 +8673,84 @@ def initialize_orpheus():
             return False
     return True
 
+def get_log_font():
+    """Console/monospace font used for the log output and template previews."""
+    if platform.system() == "Windows":
+        return ("Consolas", 10)
+    if platform.system() == "Darwin":
+        return ("Menlo", 12)
+    return ("DejaVu Sans Mono", 11)
+
+
+_LOG_FONT = get_log_font()
+# Template filename previews use the same console family, one size larger.
+_PREVIEW_FONT = (_LOG_FONT[0], _LOG_FONT[1] + 1)
+
+
+# Every variable the downloader actually supports across track, album and
+# playlist templates (union of the tag dicts built in music_downloader.py).
+# Used to validate formatting templates before saving so a typo like
+# {track_number} in Album folder format is caught here instead of at download time.
+_KNOWN_TEMPLATE_VARIABLES = frozenset({
+    # shared + track-context
+    "name", "track_name", "artist", "track_artist", "album_artist", "album",
+    "album_id", "artist_id", "artist_initials", "id", "release_year",
+    "release_date",
+    "duration", "explicit", "cover_url", "description", "upc", "label",
+    "catalog_number", "quality", "platform", "isrc", "composer", "genres",
+    "track_number", "total_tracks", "disc_number", "total_discs",
+    "playlist_position", "gid_hex", "bit_depth", "sample_rate", "bitrate",
+    "lyrics", "synced_lyrics", "preview_url", "additional",
+    # album-context
+    "tracks", "expected_track_count", "excluded_tracks", "booklet_url",
+    "cover_type", "all_track_cover_jpg_url", "animated_cover_url",
+    # playlist-context
+    "creator", "creator_id", "num_tracks", "num_tracks_from_api",
+})
+
+
+# Display labels for the formatting template fields. The group the field
+# belongs to is part of the label, so "folder format" vs "filename" is obvious
+# (e.g. Album folder format vs Track filename).
+_FORMATTING_FIELD_LABELS = {
+    "discography_format": "Discography folder format",
+    "album_format": "Album folder format",
+    "playlist_format": "Playlist folder format",
+    "track_filename_format": "Track filename",
+    "playlist_track_filename_format": "Playlist track filename",
+    "single_full_path_format": "Single track filename",
+}
+
+# Same labels are reused by save-time validation and the live preview errors,
+# so a message always names the field exactly as the UI shows it.
+_FORMATTING_TEMPLATE_KEYS = tuple(
+    (f"formatting.{field}", label) for field, label in _FORMATTING_FIELD_LABELS.items()
+)
+
+
+def validate_template_variables(template: str):
+    """Return sorted unknown variable names in a formatting template.
+
+    Returns None when the template has mismatched braces (e.g. an unclosed
+    '{') and cannot be parsed at all. Literal braces ({{ / }}) are ignored,
+    as are format specs/conversions ({name:>20}, {name!r}).
+    """
+    if not template:
+        return []
+    unknown = set()
+    try:
+        parsed = list(string.Formatter().parse(template))
+    except ValueError:
+        return None
+    for _, field_name, _, _ in parsed:
+        if not field_name:
+            continue
+        var_name = field_name.split(":", 1)[0].split("!", 1)[0].strip()
+        if var_name and var_name not in _KNOWN_TEMPLATE_VARIABLES:
+            unknown.add(var_name)
+    return sorted(unknown)
+
+
 def save_settings(show_confirmation: bool = True):
     """Loads existing settings, merges UI changes, validates, maps, and saves back to settings.json.
 
@@ -8887,6 +8966,24 @@ def save_settings(show_confirmation: bool = True):
                 _am_gui[_hk] = ""
     if not validate_codec_conversions():
         return False
+
+    # Warn before saving if any formatting template references unknown variables,
+    # so a typo (e.g. {track_number} in Album folder format) is caught here instead of
+    # crashing the first download that uses the template.
+    for _tkey, _tlabel in _FORMATTING_TEMPLATE_KEYS:
+        _tvar = settings_vars.get("globals", {}).get(_tkey)
+        if not isinstance(_tvar, tkinter.StringVar):
+            continue
+        _tpl = (_tvar.get() or "").strip()
+        if not _tpl:
+            continue  # empty template (e.g. playlist fallback) is allowed
+        _unknown = validate_template_variables(_tpl)
+        if _unknown is None:
+            parse_errors.append(f"'{_tlabel}' contains mismatched braces and cannot be formatted.")
+        elif _unknown:
+            parse_errors.append(
+                f"Unknown variable(s) in '{_tlabel}': {{{'}, {'.join(_unknown)}}}"
+            )
 
     if parse_errors:
          error_list = "\\n - ".join(parse_errors)
@@ -20528,17 +20625,7 @@ if __name__ == "__main__":
         output_frame = customtkinter.CTkFrame(download_tab, fg_color="transparent"); output_frame.grid(row=2, column=0, columnspan=4, sticky="nsew", padx=15, pady=(15, 15)); output_frame.grid_rowconfigure(1, weight=1); output_frame.grid_columnconfigure(0, weight=1)
         output_label = customtkinter.CTkLabel(output_frame, text="OUTPUT", text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11)); output_label.grid(row=0, column=0, sticky="w", pady=(0, 3)) 
         textbox_container = customtkinter.CTkFrame(output_frame, fg_color=SURFACE_COLOR); textbox_container.grid(row=1, column=0, sticky="nsew"); textbox_container.grid_columnconfigure(0, weight=1); textbox_container.grid_rowconfigure(0, weight=1); textbox_container.grid_columnconfigure(1, weight=0)  
-        current_os = platform.system()
-        if current_os == "Windows":
-            log_font_family = "Consolas"
-            log_font_size = 10
-        elif current_os == "Darwin":
-            log_font_family = "Menlo"
-            log_font_size = 12
-        else:
-            log_font_family = "DejaVu Sans Mono"
-            log_font_size = 11
-        log_font = (log_font_family, log_font_size)
+        log_font = get_log_font()
 
         log_textbox = tkinter.Text(textbox_container, wrap=tkinter.WORD, state='disabled', font=log_font, bg=SURFACE_COLOR, fg=SECONDARY_TEXT_COLOR, insertbackground=SECONDARY_TEXT_COLOR, selectbackground=LINK_COLOR, selectforeground=WHITE_TEXT_COLOR, relief="flat", borderwidth=0, highlightthickness=0, exportselection=False)
         globals()['log_textbox'] = log_textbox
@@ -21102,7 +21189,7 @@ if __name__ == "__main__":
             "artist_downloading.prefer_highest_quality_edition": "When downloading an artist/label discography, group duplicate editions of the same album and download only the highest-priority version (Hi-Res > FLAC > Atmos if enabled).\nDisable to download every listed edition.",
             "artist_downloading.merge_same_name_albums": "When downloading an artist/label discography, merge editions of the same album that share the same quality into one folder instead of creating duplicate folders with [FLAC]/[FLAC]-style suffixes.\nTracks that already exist are kept and same-named tracks with a different duration are renamed (e.g. Track (2)).\nOff (default): each edition gets its own folder.",
             "artist_downloading.explicit_content": "How to handle explicit vs clean editions during discography downloads:\n• prefer_explicit — prefer explicit when both exist; otherwise take whatever is available\n• non_explicit_only — download only clean versions; skip if only explicit exists\n• both — download explicit and clean editions when both exist",
-            "formatting.discography_format": """Album folders inside artist/label discography downloads.\nSame variables as Album Format. Use {name} if album_format already has {artist}.\nAdd {quality} for multiple editions (e.g. {name} {quality}); collisions are auto-disambiguated with a version or ID suffix.""",
+            "formatting.discography_format": """Album folders inside artist/label discography downloads.\nSame variables as Album folder format. Use {name} if album_format already has {artist}.\nAdd {quality} for multiple editions (e.g. {name} {quality}); collisions are auto-disambiguated with a version or ID suffix.""",
             "formatting.album_format": """Folder structure for albums. Variables:
  {artist}, {artist_id}, {artist_initials}, {album_artist}, {name}
  {id}, {label}, {catalog_number}, {release_year}
@@ -21196,6 +21283,75 @@ Unnecessary Lossless-to-Lossless""",
             "formatting.single_full_path_format": _track_template_vars,
         }
 
+        # Sample data + renderer for the live filename previews under formatting fields.
+        _SAMPLE_TEMPLATE_TAGS = {
+            "name": "Midnight Drive",
+            "track_name": "Midnight Drive",
+            "artist": "The Sample Band",
+            "track_artist": "The Sample Band",
+            "album_artist": "The Sample Band",
+            "artist_id": "98765",
+            "artist_initials": "SB",
+            "album": "Neon Horizons",
+            "album_id": "1122334455",
+            "track_number": "3",
+            "total_tracks": "12",
+            "disc_number": "1",
+            "total_discs": "2",
+            "playlist_position": "5",
+            "id": "0987654321",
+            "label": "Demo Records",
+            "catalog_number": "DEMO-042",
+            "isrc": "USDEM2500001",
+            "upc": "001234567890",
+            "release_year": "2025",
+            "release_date": "2025-06-13",
+            "explicit": " 🅴",
+            "quality": "FLAC",
+            "platform": "Apple Music",
+            "creator": "Sample Curator",
+            "creator_id": "54321",
+            "tracks": "24",
+            "composer": "Sample Composer",
+            "genres": "Synthwave",
+        }
+        _TRACK_TEMPLATE_KEYS = (
+            "formatting.track_filename_format",
+            "formatting.playlist_track_filename_format",
+            "formatting.single_full_path_format",
+        )
+
+        def _preview_template(template, full_key):
+            """Render a template with sample values; returns (ok, rendered_text)."""
+            from orpheus.music_downloader import _format_path_template
+            tags = dict(_SAMPLE_TEMPLATE_TAGS)
+            # Album/playlist folder templates use {name} for the album/playlist
+            # title, while track templates use it for the track title — mirror
+            # the downloader's per-context tag semantics.
+            if full_key not in _TRACK_TEMPLATE_KEYS:
+                tags["name"] = tags["album"]
+            zfill_var = settings_vars.get("globals", {}).get("formatting.enable_zfill")
+            if isinstance(zfill_var, tkinter.BooleanVar):
+                zfill = zfill_var.get()
+            else:
+                zfill = bool(current_settings.get("globals", {}).get("formatting", {}).get("enable_zfill", True))
+            if full_key in _TRACK_TEMPLATE_KEYS and zfill:
+                tags["track_number"] = "03"
+                tags["disc_number"] = "01"
+                tags["playlist_position"] = "05"
+            setting_name = _FORMATTING_FIELD_LABELS.get(
+                full_key.split(".", 1)[-1],
+                full_key.split(".", 1)[-1].replace("_", " ").title(),
+            )
+            try:
+                return True, _format_path_template(template, tags, setting_name)
+            except ValueError as e:
+                return False, str(e)
+
+        # Widget registry so clicking a variable below can insert it into the matching entry.
+        _settings_template_entry_widgets = {}
+        _template_preview_callbacks = []
+
         def _add_template_variables_toggle(parent, row, full_key):
             """Render a collapsible 'Available variables' hint under a formatting field."""
             text = TEMPLATE_VARIABLES.get(full_key)
@@ -21224,13 +21380,37 @@ Unnecessary Lossless-to-Lossless""",
                     _var_part, _desc_part = _line.split(" — ", 1)
                 else:
                     _var_part, _desc_part = _line, ""
-                customtkinter.CTkLabel(
-                    _row, text=_var_part, text_color=PURE_WHITE_TEXT_COLOR,
-                    font=("Consolas", 10), anchor="w",
-                ).pack(side="left")
+                _var_label = customtkinter.CTkLabel(
+                    _row, text=_var_part, text_color=LINK_COLOR,
+                    font=("Consolas", 10), anchor="w", cursor=HAND_CURSOR_LINK,
+                )
+                _var_label.pack(side="left")
+
+                def _insert_var(_event=None, token=_var_part, key=full_key):
+                    """Insert the clicked variable token into the associated template entry."""
+                    entry = _settings_template_entry_widgets.get(key)
+                    if entry is not None:
+                        try:
+                            entry.focus_set()
+                            entry.insert(tkinter.INSERT, token)
+                            return
+                        except Exception:
+                            pass
+                    # Fallback: append to the bound StringVar if the widget isn't registered.
+                    try:
+                        var_obj = settings_vars.get("globals", {}).get(key)
+                        if var_obj is not None and hasattr(var_obj, "set"):
+                            var_obj.set(str(var_obj.get()) + token)
+                    except Exception:
+                        pass
+
+                _var_label.bind("<Button-1>", _insert_var)
+                _var_label.bind("<Enter>", lambda e, _l=_var_label: _l.configure(text_color=LINK_HOVER_COLOR))
+                _var_label.bind("<Leave>", lambda e, _l=_var_label: _l.configure(text_color=LINK_COLOR))
+
                 if _desc_part:
                     customtkinter.CTkLabel(
-                        _row, text=" — " + _desc_part, text_color=GRAY_TEXT_COLOR,
+                        _row, text=" — " + _desc_part, text_color=SECONDARY_TEXT_COLOR,
                         font=("Consolas", 10), anchor="w",
                     ).pack(side="left")
             def _toggle(_event=None):
@@ -21245,10 +21425,53 @@ Unnecessary Lossless-to-Lossless""",
             toggle.bind("<Enter>", lambda e: toggle.configure(text_color=LINK_HOVER_COLOR))
             toggle.bind("<Leave>", lambda e: toggle.configure(text_color=LINK_COLOR))
 
+        # Sub-section headers within sections that mix different kinds of settings
+        # (Formatting: folder templates vs. filename templates vs. options).
+        # Each entry is (header text, one-line explainer shown next to the header).
+        _formatting_sub_headers = {
+            "discography_format": ("Folder / path templates", "Controls how download folders are named and nested."),
+            "track_filename_format": ("File name templates", "Controls how the track files inside those folders are named."),
+            "metadata_separator": ("Other options", "Separators, number padding, and how the templates are applied."),
+        }
+
         for section_key, section_value in DEFAULT_SETTINGS["globals"].items():
             if isinstance(section_value, dict):
                 customtkinter.CTkLabel(global_settings_frame, text=section_key.replace("_", " ").upper(), text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11)).grid(row=row, column=0, columnspan=3, sticky="w", padx=(0, 10), pady=(10, 5)); row += 1
+                # Tracks widgets of the collapsible "Other options" group (Formatting).
+                _options_group = {"active": False, "open": False, "widgets": [], "toggle": None}
                 for field, default_value in section_value.items():
+                    _sub_header_info = _formatting_sub_headers.get(field)
+                    if _sub_header_info:
+                        if field == "metadata_separator":
+                            # "Other options" is collapsible (hidden by default) to
+                            # declutter the template fields above it.
+                            _group_toggle = customtkinter.CTkLabel(
+                                global_settings_frame, text="▸ Other options",
+                                text_color=GRAY_TEXT_COLOR, cursor=HAND_CURSOR_LINK,
+                                font=("Segoe UI", 11), anchor="w",
+                            )
+                            _group_toggle.grid(row=row, column=0, sticky="w", padx=(15, 10), pady=(12, 4))
+                            # Align the explainer with the input fields below (column 1).
+                            customtkinter.CTkLabel(global_settings_frame, text=_sub_header_info[1], text_color=SECONDARY_TEXT_COLOR, font=("Segoe UI", 11), anchor="w", justify="left", wraplength=900).grid(row=row, column=1, columnspan=2, sticky="w", padx=(5, 10), pady=(12, 4)); row += 1
+
+                            def _toggle_options_group(_event=None, group=_options_group, toggle=_group_toggle):
+                                group["open"] = not group["open"]
+                                toggle.configure(text="▾ Other options" if group["open"] else "▸ Other options")
+                                for _w in group["widgets"]:
+                                    if group["open"]:
+                                        _w.grid()
+                                    else:
+                                        _w.grid_remove()
+
+                            _group_toggle.bind("<Button-1>", _toggle_options_group)
+                            _group_toggle.bind("<Enter>", lambda e, t=_group_toggle: t.configure(text_color=LINK_COLOR))
+                            _group_toggle.bind("<Leave>", lambda e, t=_group_toggle: t.configure(text_color=GRAY_TEXT_COLOR))
+                            _options_group["toggle"] = _group_toggle
+                            _options_group["active"] = True
+                        else:
+                            customtkinter.CTkLabel(global_settings_frame, text=_sub_header_info[0].upper(), text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), anchor="w").grid(row=row, column=0, sticky="w", padx=(15, 10), pady=(12, 4))
+                            # Align the explainer with the input fields below (column 1).
+                            customtkinter.CTkLabel(global_settings_frame, text=_sub_header_info[1], text_color=SECONDARY_TEXT_COLOR, font=("Segoe UI", 11), anchor="w", justify="left", wraplength=900).grid(row=row, column=1, columnspan=2, sticky="w", padx=(5, 10), pady=(12, 4)); row += 1
                     current_value = current_settings["globals"].get(section_key, {}).get(field, default_value); full_key = f"{section_key}.{field}"
                     if full_key == "advanced.conversion_flags":
                         aac_label_text = "AAC Audio Bitrate"
@@ -21394,7 +21617,7 @@ Unnecessary Lossless-to-Lossless""",
                         CTkToolTip(opus_slider_frame, message=tooltip_opus_text, bg_color=TOOLTIP_MENU_BG, text_color=WHITE_TEXT_COLOR, padx=12, pady=12)
                         row += 1
                         continue
-                    label_widget = customtkinter.CTkLabel(global_settings_frame, text=field.replace("_", " ").title())
+                    label_widget = customtkinter.CTkLabel(global_settings_frame, text=_FORMATTING_FIELD_LABELS.get(field, field.replace("_", " ").title()))
                     label_widget.grid(row=row, column=0, sticky="w", padx=(10, 10), pady=5)
                     widget = None; browse_btn = None
 
@@ -21771,6 +21994,50 @@ Unnecessary Lossless-to-Lossless""",
                             widget.bind("<Control-Button-1>", show_context_menu)
                             widget.bind("<FocusIn>", lambda e, w=widget: handle_focus_in(w))
                             widget.bind("<FocusOut>", lambda e, w=widget: handle_focus_out(w))
+                            if full_key in TEMPLATE_VARIABLES:
+                                _settings_template_entry_widgets[full_key] = widget
+                                def _reset_template_to_default(_event=None, key=full_key, default=default_value, var_ref=var):
+                                    """Reset the formatting template field back to its default value."""
+                                    var_ref.set(str(default))
+                                reset_label = customtkinter.CTkLabel(
+                                    global_settings_frame, text="↺ Reset",
+                                    text_color=LINK_COLOR, cursor=HAND_CURSOR_LINK,
+                                    font=("Segoe UI", 11), anchor="e",
+                                )
+                                reset_label.grid(row=row, column=2, sticky="e", padx=(5, 5), pady=5)
+                                reset_label.bind("<Button-1>", _reset_template_to_default)
+                                reset_label.bind("<Enter>", lambda e, _l=reset_label: _l.configure(text_color=LINK_HOVER_COLOR))
+                                reset_label.bind("<Leave>", lambda e, _l=reset_label: _l.configure(text_color=LINK_COLOR))
+                                # "Preview:" prefix keeps its own muted color; the rendered
+                                # filename next to it uses the brighter text color.
+                                preview_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
+                                preview_frame.grid(row=row + 1, column=1, columnspan=2, sticky="ew", padx=(10, 5), pady=(0, 2))
+                                preview_prefix_label = customtkinter.CTkLabel(
+                                    preview_frame, text="Preview:",
+                                    text_color=GRAY_TEXT_COLOR, font=_PREVIEW_FONT, anchor="w",
+                                )
+                                preview_prefix_label.pack(side="left")
+                                preview_text_label = customtkinter.CTkLabel(
+                                    preview_frame, text="",
+                                    text_color=SECONDARY_TEXT_COLOR, font=_PREVIEW_FONT,
+                                    anchor="w", justify="left", wraplength=640,
+                                )
+                                preview_text_label.pack(side="left", padx=(8, 0))
+
+                                def _update_template_preview(*_args, key=full_key, var_ref=var, text_label=preview_text_label):
+                                    template = (var_ref.get() or "").strip()
+                                    if not template:
+                                        text_label.configure(text="", text_color=SECONDARY_TEXT_COLOR)
+                                        return
+                                    ok, rendered = _preview_template(template, key)
+                                    if ok:
+                                        text_label.configure(text=rendered, text_color=SECONDARY_TEXT_COLOR)
+                                    else:
+                                        text_label.configure(text="⚠ " + rendered, text_color=ERROR_COLOR)
+
+                                var.trace_add("write", _update_template_preview)
+                                _template_preview_callbacks.append(_update_template_preview)
+                                _update_template_preview()
 
                     tooltip_text = tooltip_texts.get(full_key)
                     if tooltip_text and widget:
@@ -21780,10 +22047,25 @@ Unnecessary Lossless-to-Lossless""",
                               CTkToolTip(label_widget, message=tooltip_text, bg_color=TOOLTIP_MENU_BG, text_color=WHITE_TEXT_COLOR, padx=12, pady=12)
 
                     if full_key in TEMPLATE_VARIABLES:
-                        _add_template_variables_toggle(global_settings_frame, row + 1, full_key)
-                        row += 2
+                        _add_template_variables_toggle(global_settings_frame, row + 2, full_key)
+                        row += 3
                     else:
                         row += 1
+                    # Register the field's widgets with the active collapsible group
+                    # and hide them if the group is collapsed.
+                    if _options_group["active"]:
+                        if label_widget is not None:
+                            _options_group["widgets"].append(label_widget)
+                        if widget is not None:
+                            _options_group["widgets"].append(widget)
+                        if not _options_group["open"]:
+                            if label_widget is not None:
+                                label_widget.grid_remove()
+                            if widget is not None:
+                                widget.grid_remove()
+        _zfill_var = settings_vars.get("globals", {}).get("formatting.enable_zfill")
+        if isinstance(_zfill_var, tkinter.BooleanVar) and _template_preview_callbacks:
+            _zfill_var.trace_add("write", lambda *a: [cb() for cb in _template_preview_callbacks])
         credential_keys_for_settings_tabs = [pk for pk in installed_platform_keys if pk not in ["Musixmatch", "LRCLIB"]]        
         
         sorted_platform_keys_for_tabs = sorted(credential_keys_for_settings_tabs)
