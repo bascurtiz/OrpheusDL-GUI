@@ -13197,12 +13197,13 @@ def _start_single_download(url_to_download, output_path_final, search_result_dat
             show_centered_messagebox("Download Error", "Beatsource credentials are required for downloading. Please fill in your username and password in the settings.", dialog_type="warning")
             return False
 
-    # Apple Music: require cookies.txt before download
+    # Apple Music: require cookies.txt or media-user-token before download
     if 'music.apple.com' in url_to_download:
         apple_creds = (current_settings.get("credentials") or {}).get("Apple Music") or {}
         cookies_path = apple_creds.get("cookies_path", "") or os.path.join(application_path, "config", "cookies.txt")
-        if not os.path.isfile(cookies_path):
-            show_centered_messagebox("Download Error", "Apple Music cookies are required for downloading. Please provide cookies.txt in /config folder.", dialog_type="warning")
+        media_token = (apple_creds.get("media_user_token") or "").strip()
+        if not os.path.isfile(cookies_path) and not media_token:
+            show_centered_messagebox("Download Error", "Apple Music authentication is required for downloading. Please provide cookies.txt in the /config folder or fill in the Media User Token in Settings → Apple Music.", dialog_type="warning")
             return False
 
     # Deezer: require email/password or arl before download
