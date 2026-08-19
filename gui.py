@@ -21284,36 +21284,38 @@ Unnecessary Lossless-to-Lossless""",
         }
 
         # Sample data + renderer for the live filename previews under formatting fields.
+        # Uses a recognizable example so the previews read naturally (e.g.
+        # "Michael Jackson - Beat It").
         _SAMPLE_TEMPLATE_TAGS = {
-            "name": "Midnight Drive",
-            "track_name": "Midnight Drive",
-            "artist": "The Sample Band",
-            "track_artist": "The Sample Band",
-            "album_artist": "The Sample Band",
+            "name": "Beat It",
+            "track_name": "Beat It",
+            "artist": "Michael Jackson",
+            "track_artist": "Michael Jackson",
+            "album_artist": "Michael Jackson",
             "artist_id": "98765",
-            "artist_initials": "SB",
-            "album": "Neon Horizons",
+            "artist_initials": "MJ",
+            "album": "Beat It",
             "album_id": "1122334455",
             "track_number": "3",
-            "total_tracks": "12",
+            "total_tracks": "9",
             "disc_number": "1",
-            "total_discs": "2",
+            "total_discs": "1",
             "playlist_position": "5",
             "id": "0987654321",
-            "label": "Demo Records",
-            "catalog_number": "DEMO-042",
-            "isrc": "USDEM2500001",
-            "upc": "001234567890",
-            "release_year": "2025",
-            "release_date": "2025-06-13",
-            "explicit": " 🅴",
+            "label": "Epic Records",
+            "catalog_number": "EK-35793",
+            "isrc": "USSM18200111",
+            "upc": "074643579324",
+            "release_year": "1982",
+            "release_date": "1982-11-30",
+            "explicit": "",
             "quality": "FLAC",
             "platform": "Apple Music",
             "creator": "Sample Curator",
             "creator_id": "54321",
-            "tracks": "24",
-            "composer": "Sample Composer",
-            "genres": "Synthwave",
+            "tracks": "9",
+            "composer": "Michael Jackson",
+            "genres": "Pop",
         }
         _TRACK_TEMPLATE_KEYS = (
             "formatting.track_filename_format",
@@ -21352,34 +21354,53 @@ Unnecessary Lossless-to-Lossless""",
         _settings_template_entry_widgets = {}
         _template_preview_callbacks = []
 
-        def _add_template_variables_toggle(parent, row, full_key):
-            """Render a collapsible 'Available variables' hint under a formatting field."""
+        def _add_template_variables_toggle(parent, preview_frame, row, full_key):
+            """Render an 'Available variables' button at the right end of the preview row.
+
+            Clicking the button toggles a two-column grid of clickable variable
+            tokens below the field; clicking a token inserts it into the
+            matching template entry.
+            """
             text = TEMPLATE_VARIABLES.get(full_key)
             if not text:
                 return
-            container = customtkinter.CTkFrame(parent, fg_color="transparent")
-            container.grid(row=row, column=1, columnspan=2, sticky="ew", padx=(10, 5), pady=(0, 6))
-            container.grid_columnconfigure(0, weight=1)
             _open = {"open": False}
-            toggle = customtkinter.CTkLabel(
-                container,
-                text="▸ Available variables",
-                text_color=LINK_COLOR,
-                cursor=HAND_CURSOR_LINK,
-                anchor="w",
-                font=("Segoe UI", 11),
+
+            def _toggle(_event=None):
+                _open["open"] = not _open["open"]
+                if _open["open"]:
+                    toggle_btn.configure(text="▲ Variables")
+                    details_frame.grid()
+                else:
+                    toggle_btn.configure(text="▼ Variables")
+                    details_frame.grid_remove()
+
+            toggle_btn = customtkinter.CTkButton(
+                preview_frame,
+                text="▼ Variables",
+                width=100, height=24,
+                fg_color=BUTTON_COLOR,
+                hover_color=LINK_COLOR,
+                # Same text color as the Save button (the CTkButton theme default).
+                text_color=customtkinter.ThemeManager.theme["CTkButton"]["text_color"],
+                font=("Segoe UI", 10),
+                command=_toggle,
             )
-            toggle.pack(anchor="w")
-            details_frame = customtkinter.CTkFrame(container, fg_color="transparent")
-            for _line in text.split("\n"):
-                if not _line.strip():
-                    continue
-                _row = customtkinter.CTkFrame(details_frame, fg_color="transparent")
-                _row.pack(anchor="w", fill="x")
+            toggle_btn.pack(side="right", padx=(12, 0))
+
+            details_frame = customtkinter.CTkFrame(parent, fg_color="transparent")
+            details_frame.grid(row=row, column=1, columnspan=2, sticky="ew", padx=(10, 5), pady=(4, 12))
+            details_frame.grid_columnconfigure(0, weight=1)
+            details_frame.grid_columnconfigure(1, weight=1)
+            details_frame.grid_remove()
+
+            for _i, _line in enumerate(ln for ln in text.split("\n") if ln.strip()):
                 if " — " in _line:
                     _var_part, _desc_part = _line.split(" — ", 1)
                 else:
                     _var_part, _desc_part = _line, ""
+                _row = customtkinter.CTkFrame(details_frame, fg_color="transparent")
+                _row.grid(row=_i // 2, column=_i % 2, sticky="w", padx=(0, 24), pady=1)
                 _var_label = customtkinter.CTkLabel(
                     _row, text=_var_part, text_color=LINK_COLOR,
                     font=("Consolas", 10), anchor="w", cursor=HAND_CURSOR_LINK,
@@ -21413,65 +21434,81 @@ Unnecessary Lossless-to-Lossless""",
                         _row, text=" — " + _desc_part, text_color=SECONDARY_TEXT_COLOR,
                         font=("Consolas", 10), anchor="w",
                     ).pack(side="left")
-            def _toggle(_event=None):
-                _open["open"] = not _open["open"]
-                if _open["open"]:
-                    toggle.configure(text="▾ Available variables")
-                    details_frame.pack(anchor="w", pady=(5, 0), fill="x")
-                else:
-                    toggle.configure(text="▸ Available variables")
-                    details_frame.pack_forget()
-            toggle.bind("<Button-1>", _toggle)
-            toggle.bind("<Enter>", lambda e: toggle.configure(text_color=LINK_HOVER_COLOR))
-            toggle.bind("<Leave>", lambda e: toggle.configure(text_color=LINK_COLOR))
 
         # Sub-section headers within sections that mix different kinds of settings
         # (Formatting: folder templates vs. filename templates vs. options).
         # Each entry is (header text, one-line explainer shown next to the header).
         _formatting_sub_headers = {
-            "discography_format": ("Folder / path templates", "Controls how download folders are named and nested."),
-            "track_filename_format": ("File name templates", "Controls how the track files inside those folders are named."),
-            "metadata_separator": ("Other options", "Separators, number padding, and how the templates are applied."),
+            "discography_format": ("📁", "Folder / path templates", "Controls how download folders are named and nested."),
+            "track_filename_format": ("📄", "File name templates", "Controls how the track files inside those folders are named."),
+            "metadata_separator": ("⚙", "Other options", "Separators, number padding, and how the templates are applied."),
         }
 
         for section_key, section_value in DEFAULT_SETTINGS["globals"].items():
             if isinstance(section_value, dict):
                 customtkinter.CTkLabel(global_settings_frame, text=section_key.replace("_", " ").upper(), text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11)).grid(row=row, column=0, columnspan=3, sticky="w", padx=(0, 10), pady=(10, 5)); row += 1
                 # Tracks widgets of the collapsible "Other options" group (Formatting).
-                _options_group = {"active": False, "open": False, "widgets": [], "toggle": None}
+                # The group starts expanded; the toggle collapses it.
+                _options_group = {"active": False, "open": True, "widgets": [], "toggle": None}
                 for field, default_value in section_value.items():
                     _sub_header_info = _formatting_sub_headers.get(field)
                     if _sub_header_info:
                         if field == "metadata_separator":
-                            # "Other options" is collapsible (hidden by default) to
-                            # declutter the template fields above it.
-                            _group_toggle = customtkinter.CTkLabel(
-                                global_settings_frame, text="▸ Other options",
-                                text_color=GRAY_TEXT_COLOR, cursor=HAND_CURSOR_LINK,
-                                font=("Segoe UI", 11), anchor="w",
-                            )
-                            _group_toggle.grid(row=row, column=0, sticky="w", padx=(15, 10), pady=(12, 4))
-                            # Align the explainer with the input fields below (column 1).
-                            customtkinter.CTkLabel(global_settings_frame, text=_sub_header_info[1], text_color=SECONDARY_TEXT_COLOR, font=("Segoe UI", 11), anchor="w", justify="left", wraplength=900).grid(row=row, column=1, columnspan=2, sticky="w", padx=(5, 10), pady=(12, 4)); row += 1
+                            # "Other options" is collapsible; its header row sits on a
+                            # dark full-width strip. The header labels must carry the
+                            # same fg_color: CTkLabels with fg_color="transparent" paint
+                            # the parent's background as an opaque rectangle, which would
+                            # cover the strip and leave a two-color patchwork. With the
+                            # matching fg_color the row reads as one clean band.
+                            # height=1: an empty CTkFrame otherwise requests 200px and
+                            # would blow the row up into a giant dark block.
+                            customtkinter.CTkFrame(global_settings_frame, fg_color=DARKER_SURFACE_COLOR, corner_radius=0, height=1).grid(row=row, column=0, columnspan=3, sticky="nsew", padx=(5, 5), pady=(12, 12))
+                            # Icon and title are separate labels packed with a fixed
+                            # pixel gap (glyph widths differ per emoji, so spaces in one
+                            # string would misalign the headers).
+                            _sub_icon, _sub_title, _sub_explainer = _sub_header_info
+                            _header_frame = customtkinter.CTkFrame(global_settings_frame, fg_color=DARKER_SURFACE_COLOR, corner_radius=0)
+                            _header_frame.grid(row=row, column=0, sticky="w", padx=(15, 10), pady=(12, 12))
+                            _group_icon = customtkinter.CTkLabel(_header_frame, text=_sub_icon, text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), fg_color=DARKER_SURFACE_COLOR, width=20, anchor="center")
+                            _group_icon.pack(side="left")
+                            _group_toggle = customtkinter.CTkLabel(_header_frame, text=_sub_title.upper(), text_color=GRAY_TEXT_COLOR, cursor=HAND_CURSOR_LINK, font=("Segoe UI", 11), fg_color=DARKER_SURFACE_COLOR)
+                            _group_toggle.pack(side="left", padx=(8, 0))
+                            customtkinter.CTkLabel(global_settings_frame, text=_sub_explainer, text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), anchor="w", justify="left", wraplength=900, fg_color=DARKER_SURFACE_COLOR).grid(row=row, column=1, columnspan=2, sticky="w", padx=(5, 10), pady=(12, 12))
+                            row += 1
 
-                            def _toggle_options_group(_event=None, group=_options_group, toggle=_group_toggle):
+                            def _toggle_options_group(_event=None, group=_options_group):
                                 group["open"] = not group["open"]
-                                toggle.configure(text="▾ Other options" if group["open"] else "▸ Other options")
                                 for _w in group["widgets"]:
                                     if group["open"]:
                                         _w.grid()
                                     else:
                                         _w.grid_remove()
 
-                            _group_toggle.bind("<Button-1>", _toggle_options_group)
-                            _group_toggle.bind("<Enter>", lambda e, t=_group_toggle: t.configure(text_color=LINK_COLOR))
-                            _group_toggle.bind("<Leave>", lambda e, t=_group_toggle: t.configure(text_color=GRAY_TEXT_COLOR))
+                            for _w in (_group_icon, _group_toggle, _header_frame):
+                                _w.bind("<Button-1>", _toggle_options_group)
+                                _w.bind("<Enter>", lambda e, t=_group_toggle: t.configure(text_color=LINK_COLOR))
+                                _w.bind("<Leave>", lambda e, t=_group_toggle: t.configure(text_color=GRAY_TEXT_COLOR))
                             _options_group["toggle"] = _group_toggle
                             _options_group["active"] = True
                         else:
-                            customtkinter.CTkLabel(global_settings_frame, text=_sub_header_info[0].upper(), text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), anchor="w").grid(row=row, column=0, sticky="w", padx=(15, 10), pady=(12, 4))
-                            # Align the explainer with the input fields below (column 1).
-                            customtkinter.CTkLabel(global_settings_frame, text=_sub_header_info[1], text_color=SECONDARY_TEXT_COLOR, font=("Segoe UI", 11), anchor="w", justify="left", wraplength=900).grid(row=row, column=1, columnspan=2, sticky="w", padx=(5, 10), pady=(12, 4)); row += 1
+                            # Dark full-width strip behind the sub-header row. The labels
+                            # are gridded in the parent (so the explainer stays aligned
+                            # with the input fields in column 1) and must carry the same
+                            # fg_color as the strip: CTkLabels with fg_color="transparent"
+                            # paint the parent's background as an opaque rectangle, which
+                            # would cover the strip and leave a two-color patchwork.
+                            # height=1: an empty CTkFrame otherwise requests 200px and
+                            # would blow the row up into a giant dark block.
+                            customtkinter.CTkFrame(global_settings_frame, fg_color=DARKER_SURFACE_COLOR, corner_radius=0, height=1).grid(row=row, column=0, columnspan=3, sticky="nsew", padx=(5, 5), pady=(12, 12))
+                            # Icon and title as separate labels with a fixed pixel gap
+                            # (see the metadata branch for why spaces don't align emoji).
+                            _sub_icon, _sub_title, _sub_explainer = _sub_header_info
+                            _header_frame = customtkinter.CTkFrame(global_settings_frame, fg_color=DARKER_SURFACE_COLOR, corner_radius=0)
+                            _header_frame.grid(row=row, column=0, sticky="w", padx=(15, 10), pady=(12, 12))
+                            customtkinter.CTkLabel(_header_frame, text=_sub_icon, text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), fg_color=DARKER_SURFACE_COLOR, width=20, anchor="center").pack(side="left")
+                            customtkinter.CTkLabel(_header_frame, text=_sub_title.upper(), text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), fg_color=DARKER_SURFACE_COLOR).pack(side="left", padx=(8, 0))
+                            customtkinter.CTkLabel(global_settings_frame, text=_sub_explainer, text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), anchor="w", justify="left", wraplength=900, fg_color=DARKER_SURFACE_COLOR).grid(row=row, column=1, columnspan=2, sticky="w", padx=(5, 10), pady=(12, 12))
+                            row += 1
                     current_value = current_settings["globals"].get(section_key, {}).get(field, default_value); full_key = f"{section_key}.{field}"
                     if full_key == "advanced.conversion_flags":
                         aac_label_text = "AAC Audio Bitrate"
@@ -21987,34 +22024,48 @@ Unnecessary Lossless-to-Lossless""",
                              module_default_widgets[field] = widget
                              if not var.get(): var.set("default")
                          else:
-                            widget = customtkinter.CTkEntry(global_settings_frame, textvariable=var)
-                            widget.grid(row=row, column=1, sticky="ew", padx=(5, 5), pady=5)
+                            if full_key in TEMPLATE_VARIABLES:
+                                # The ↺ Reset link sits right next to the input field in
+                                # column 2, so the input itself spans the full weighted
+                                # column and the Variables button below can align with the
+                                # input's right edge.
+                                widget = customtkinter.CTkEntry(global_settings_frame, textvariable=var)
+                                widget.grid(row=row, column=1, sticky="ew", padx=(5, 5), pady=5)
+                                _settings_template_entry_widgets[full_key] = widget
+                                reset_label = customtkinter.CTkLabel(
+                                    global_settings_frame, text="↺ Reset",
+                                    text_color=LINK_COLOR, cursor=HAND_CURSOR_LINK,
+                                    font=("Segoe UI", 11), anchor="w",
+                                )
+                                reset_label.grid(row=row, column=2, sticky="w", padx=(2, 5), pady=5)
+
+                                def _reset_template_to_default(_event=None, key=full_key, default=default_value, var_ref=var):
+                                    """Reset the formatting template field back to its default value."""
+                                    var_ref.set(str(default))
+                                reset_label.bind("<Button-1>", _reset_template_to_default)
+                                reset_label.bind("<Enter>", lambda e, _l=reset_label: _l.configure(text_color=LINK_HOVER_COLOR))
+                                reset_label.bind("<Leave>", lambda e, _l=reset_label: _l.configure(text_color=LINK_COLOR))
+                            else:
+                                widget = customtkinter.CTkEntry(global_settings_frame, textvariable=var)
+                                widget.grid(row=row, column=1, sticky="ew", padx=(5, 5), pady=5)
                             widget.bind("<Button-3>", show_context_menu)
                             widget.bind("<Button-2>", show_context_menu)
                             widget.bind("<Control-Button-1>", show_context_menu)
                             widget.bind("<FocusIn>", lambda e, w=widget: handle_focus_in(w))
                             widget.bind("<FocusOut>", lambda e, w=widget: handle_focus_out(w))
                             if full_key in TEMPLATE_VARIABLES:
-                                _settings_template_entry_widgets[full_key] = widget
-                                def _reset_template_to_default(_event=None, key=full_key, default=default_value, var_ref=var):
-                                    """Reset the formatting template field back to its default value."""
-                                    var_ref.set(str(default))
-                                reset_label = customtkinter.CTkLabel(
-                                    global_settings_frame, text="↺ Reset",
-                                    text_color=LINK_COLOR, cursor=HAND_CURSOR_LINK,
-                                    font=("Segoe UI", 11), anchor="e",
-                                )
-                                reset_label.grid(row=row, column=2, sticky="e", padx=(5, 5), pady=5)
-                                reset_label.bind("<Button-1>", _reset_template_to_default)
-                                reset_label.bind("<Enter>", lambda e, _l=reset_label: _l.configure(text_color=LINK_HOVER_COLOR))
-                                reset_label.bind("<Leave>", lambda e, _l=reset_label: _l.configure(text_color=LINK_COLOR))
-                                # "Preview:" prefix keeps its own muted color; the rendered
-                                # filename next to it uses the brighter text color.
+                                # "PREVIEW:" prefix in caps + Segoe UI; the rendered filename
+                                # next to it stays in the console font and uses the brightest
+                                # text color. The 'Available variables' button packs into the
+                                # right end of this same row.
                                 preview_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
-                                preview_frame.grid(row=row + 1, column=1, columnspan=2, sticky="ew", padx=(10, 5), pady=(0, 2))
+                                # Spans only column 1 (same as the input field) so the
+                                # Variables button's right edge aligns with the input's
+                                # right edge, not the Reset column.
+                                preview_frame.grid(row=row + 1, column=1, sticky="ew", padx=(5, 5), pady=(0, 2))
                                 preview_prefix_label = customtkinter.CTkLabel(
-                                    preview_frame, text="Preview:",
-                                    text_color=GRAY_TEXT_COLOR, font=_PREVIEW_FONT, anchor="w",
+                                    preview_frame, text="PREVIEW:",
+                                    text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 9), anchor="w",
                                 )
                                 preview_prefix_label.pack(side="left")
                                 preview_text_label = customtkinter.CTkLabel(
@@ -22047,7 +22098,7 @@ Unnecessary Lossless-to-Lossless""",
                               CTkToolTip(label_widget, message=tooltip_text, bg_color=TOOLTIP_MENU_BG, text_color=WHITE_TEXT_COLOR, padx=12, pady=12)
 
                     if full_key in TEMPLATE_VARIABLES:
-                        _add_template_variables_toggle(global_settings_frame, row + 2, full_key)
+                        _add_template_variables_toggle(global_settings_frame, preview_frame, row + 2, full_key)
                         row += 3
                     else:
                         row += 1
