@@ -771,6 +771,7 @@ MUTE_TEXT_COLOR = "#999999"       # Muted gray for secondary descriptions
 
 # Additional UI elements
 DARKER_SURFACE_COLOR = "#222323"   # Odd rows and tooltip backgrounds
+SUBHEADER_BAND_COLOR = "#2b2b2b"   # Dark band behind Formatting sub-section headers
 SEPARATOR_COLOR = "#333333"        # Horizontal separators in menus
 
 # Context Menu Platform-Specific Grays (Consolidated)
@@ -844,7 +845,7 @@ def _get_ffmpeg_path():
     """Get the path to ffmpeg executable."""
     configured = "ffmpeg"
     if 'current_settings' in globals() and current_settings:
-        configured = current_settings.get("globals", {}).get("advanced", {}).get("ffmpeg_path", "ffmpeg")
+        configured = current_settings.get("globals", {}).get("codec_conversion", {}).get("ffmpeg_path", "ffmpeg")
     resolved = locate_ffmpeg(configured, extra_search_dirs=_ffmpeg_search_directories())
     return resolved or 'ffmpeg'
 
@@ -857,15 +858,15 @@ def _repair_ffmpeg_path_in_settings(settings, persist_to_file=False):
     global CONFIG_FILE_PATH
     if "globals" not in settings:
         return None, False
-    if "advanced" not in settings["globals"]:
-        settings["globals"]["advanced"] = {}
-    adv = settings["globals"]["advanced"]
-    configured = adv.get("ffmpeg_path", "ffmpeg")
+    if "codec_conversion" not in settings["globals"]:
+        settings["globals"]["codec_conversion"] = {}
+    conv = settings["globals"]["codec_conversion"]
+    configured = conv.get("ffmpeg_path", "ffmpeg")
     resolved = locate_ffmpeg(configured, extra_search_dirs=_ffmpeg_search_directories())
     new_value = resolved if resolved else "ffmpeg"
     was_changed = (configured or "ffmpeg") != new_value
     if was_changed:
-        adv["ffmpeg_path"] = new_value
+        conv["ffmpeg_path"] = new_value
         print(f"[FFmpeg] Updated FFmpeg path setting: '{configured}' -> '{new_value}'")
     if was_changed and persist_to_file and CONFIG_FILE_PATH and os.path.isfile(CONFIG_FILE_PATH):
         try:
@@ -873,9 +874,9 @@ def _repair_ffmpeg_path_in_settings(settings, persist_to_file=False):
                 file_settings = json.load(f)
             if "global" not in file_settings:
                 file_settings["global"] = {}
-            if "advanced" not in file_settings["global"]:
-                file_settings["global"]["advanced"] = {}
-            file_settings["global"]["advanced"]["ffmpeg_path"] = new_value
+            if "codec_conversion" not in file_settings["global"]:
+                file_settings["global"]["codec_conversion"] = {}
+            file_settings["global"]["codec_conversion"]["ffmpeg_path"] = new_value
             with open(CONFIG_FILE_PATH, 'w', encoding='utf-8') as f:
                 json.dump(file_settings, f, indent=4, ensure_ascii=False)
             print(f"[FFmpeg] Saved repaired FFmpeg path to {CONFIG_FILE_PATH}")
@@ -1683,7 +1684,7 @@ class QueueLogHandler(logging.Handler):
         if is_primary_hls_ffmpeg_warning:
             if not self._specific_ffmpeg_hls_error_logged_this_download:
                 self._specific_ffmpeg_hls_error_logged_this_download = True
-                ffmpeg_path_setting = current_settings.get("globals", {}).get("advanced", {}).get("ffmpeg_path", "ffmpeg").strip()
+                ffmpeg_path_setting = current_settings.get("globals", {}).get("codec_conversion", {}).get("ffmpeg_path", "ffmpeg").strip()
                 user_friendly_ffmpeg_msg = (
                     "\n[FFMPEG ERROR] FFmpeg was not found or is misconfigured. This is required for audio conversion (e.g., SoundCloud HLS streams).\n\n"
                     "Possible Solutions:\n"
@@ -8321,8 +8322,7 @@ def load_settings():
                         "force_album_format": False,
                         "use_album_artist_for_discography": False,
                         "use_playlist_position": False,
-                        "use_album_position": False,
-                        "truncate_length": 40
+                        "use_album_position": False
                     },
                     "codecs": {
                         "proprietary_codecs": False,
@@ -8375,12 +8375,10 @@ def load_settings():
                         },
                         "conversion_keep_original": False,
                         "ffmpeg_path": default_ffmpeg_path,
-                        "cover_variance_threshold": 8,
                         "disable_subscription_checks": False,
                         "enable_undesirable_conversions": False,
                         "ignore_existing_files": False,
                         "reverify_existing_files": False,
-                        "ignore_different_artists": True,
                         "hide_ffmpeg_warning": False
                     }
                 },
@@ -8447,6 +8445,9 @@ def load_settings():
                     try: settings["globals"]["general"]["throttle_pause_seconds"] = int(orpheus_general["throttle_pause_seconds"])
                     except (TypeError, ValueError): pass
                 if "create_platform_folder" in orpheus_general: settings["globals"]["general"]["create_platform_folder"] = bool(orpheus_general["create_platform_folder"])
+                if "disable_subscription_checks" in orpheus_general: settings["globals"]["general"]["disable_subscription_checks"] = bool(orpheus_general["disable_subscription_checks"])
+                if "ignore_existing_files" in orpheus_general: settings["globals"]["general"]["ignore_existing_files"] = bool(orpheus_general["ignore_existing_files"])
+                if "reverify_existing_files" in orpheus_general: settings["globals"]["general"]["reverify_existing_files"] = bool(orpheus_general["reverify_existing_files"])
                 # Migrate legacy quality=atmos → hifi + Include Dolby Atmos
                 _q = str(settings["globals"]["general"].get("quality", "") or "").lower()
                 if _q == "atmos":
@@ -8533,6 +8534,32 @@ def load_settings():
             "modules": {}
         }
 
+    # Migrate settings that moved between sections (previously stored under
+    # advanced). Copy each into its new home once, then drop the legacy key so
+    # the in-memory settings match the Settings UI's new grouping.
+    _legacy_section_moves = [
+        ("advanced", "disable_subscription_checks", "general"),
+        ("advanced", "ignore_existing_files", "general"),
+        ("advanced", "reverify_existing_files", "general"),
+        ("advanced", "codec_conversions", "codec_conversion"),
+        ("advanced", "conversion_flags", "codec_conversion"),
+        ("advanced", "conversion_keep_original", "codec_conversion"),
+        ("advanced", "enable_undesirable_conversions", "codec_conversion"),
+        ("advanced", "ffmpeg_path", "codec_conversion"),
+        ("advanced", "hide_ffmpeg_warning", "codec_conversion"),
+    ]
+    for _from_section, _key, _to_section in _legacy_section_moves:
+        _src = settings.get("globals", {}).get(_from_section)
+        if isinstance(_src, dict) and _key in _src:
+            _dst = settings.setdefault("globals", {}).setdefault(_to_section, {})
+            # The new home is pre-populated with its default, so only move the
+            # legacy value when that default is still untouched (never clobber
+            # a value the user already saved at the new location).
+            _default = DEFAULT_SETTINGS.get("globals", {}).get(_to_section, {}).get(_key)
+            if _key not in _dst or _dst.get(_key) == _default:
+                _dst[_key] = _src[_key]
+            _src.pop(_key, None)
+
     _repair_ffmpeg_path_in_settings(settings, persist_to_file=True)
 
     current_settings = settings
@@ -8599,7 +8626,7 @@ def initialize_orpheus():
             except Exception as gui_e: print(f"Error showing CWD change critical error in GUI: {gui_e}")
             return False
     global current_settings
-    ffmpeg_path_setting = current_settings.get("globals", {}).get("advanced", {}).get("ffmpeg_path", "ffmpeg").strip()
+    ffmpeg_path_setting = current_settings.get("globals", {}).get("codec_conversion", {}).get("ffmpeg_path", "ffmpeg").strip()
     resolved_ffmpeg = locate_ffmpeg(ffmpeg_path_setting, extra_search_dirs=_ffmpeg_search_directories())
     if resolved_ffmpeg:
         ffmpeg_dir = os.path.dirname(resolved_ffmpeg)
@@ -8774,25 +8801,25 @@ def save_settings(show_confirmation: bool = True):
     updated_gui_settings = {"globals": {}, "credentials": {}}
     parse_errors = []
     collected_conversion_flags = {}
-    aac_var_key = "advanced.conversion_flags.aac.audio_bitrate"
+    aac_var_key = "codec_conversion.conversion_flags.aac.audio_bitrate"
     aac_var = settings_vars.get("globals", {}).get(aac_var_key)
     if isinstance(aac_var, tkinter.StringVar):
         collected_conversion_flags["aac"] = {"audio_bitrate": aac_var.get()}
     else:
         parse_errors.append(f"AAC bitrate var not found or invalid type for key '{aac_var_key}'. Using default.")
-        collected_conversion_flags["aac"] = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["aac"].copy()
-    flac_var_key = "advanced.conversion_flags.flac.compression_level"
+        collected_conversion_flags["aac"] = DEFAULT_SETTINGS["globals"]["codec_conversion"]["conversion_flags"]["aac"].copy()
+    flac_var_key = "codec_conversion.conversion_flags.flac.compression_level"
     flac_var = settings_vars.get("globals", {}).get(flac_var_key)
     if isinstance(flac_var, tkinter.StringVar):
         try:
             collected_conversion_flags["flac"] = {"compression_level": int(flac_var.get())}
         except ValueError:
             parse_errors.append(f"Invalid integer for FLAC compression from var '{flac_var_key}': '{flac_var.get()}'. Using default.")
-            collected_conversion_flags["flac"] = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["flac"].copy()
+            collected_conversion_flags["flac"] = DEFAULT_SETTINGS["globals"]["codec_conversion"]["conversion_flags"]["flac"].copy()
     else:
         parse_errors.append(f"FLAC compression var not found or invalid type for key '{flac_var_key}'. Using default.")
-        collected_conversion_flags["flac"] = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["flac"].copy()
-    mp3_var_key = "advanced.conversion_flags.mp3.setting"
+        collected_conversion_flags["flac"] = DEFAULT_SETTINGS["globals"]["codec_conversion"]["conversion_flags"]["flac"].copy()
+    mp3_var_key = "codec_conversion.conversion_flags.mp3.setting"
     mp3_var = settings_vars.get("globals", {}).get(mp3_var_key)
     if isinstance(mp3_var, tkinter.StringVar):
         raw_selected_mp3_option = mp3_var.get()
@@ -8807,33 +8834,33 @@ def save_settings(show_confirmation: bool = True):
             collected_conversion_flags["mp3"] = {"audio_bitrate": selected_mp3_option}
         else:
             parse_errors.append(f"Invalid MP3 setting selected from var '{mp3_var_key}': '{raw_selected_mp3_option}'. Using default.")
-            collected_conversion_flags["mp3"] = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["mp3"].copy()
+            collected_conversion_flags["mp3"] = DEFAULT_SETTINGS["globals"]["codec_conversion"]["conversion_flags"]["mp3"].copy()
     else:
         parse_errors.append(f"MP3 setting var not found or invalid type for key '{mp3_var_key}'. Using default.")
-        collected_conversion_flags["mp3"] = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["mp3"].copy()
+        collected_conversion_flags["mp3"] = DEFAULT_SETTINGS["globals"]["codec_conversion"]["conversion_flags"]["mp3"].copy()
 
-    opus_var_key = "advanced.conversion_flags.opus.b:a"
+    opus_var_key = "codec_conversion.conversion_flags.opus.b:a"
     opus_var = settings_vars.get("globals", {}).get(opus_var_key)
     if isinstance(opus_var, tkinter.StringVar):
         collected_conversion_flags["opus"] = {"b:a": opus_var.get()}
     else:
         parse_errors.append(f"Opus bitrate var not found or invalid type for key '{opus_var_key}'. Using default.")
-        collected_conversion_flags["opus"] = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["opus"].copy()
+        collected_conversion_flags["opus"] = DEFAULT_SETTINGS["globals"]["codec_conversion"]["conversion_flags"]["opus"].copy()
 
     if "globals" not in updated_gui_settings: updated_gui_settings["globals"] = {}
-    if "advanced" not in updated_gui_settings["globals"]: updated_gui_settings["globals"]["advanced"] = {}
-    updated_gui_settings["globals"]["advanced"]["conversion_flags"] = collected_conversion_flags
+    if "codec_conversion" not in updated_gui_settings["globals"]: updated_gui_settings["globals"]["codec_conversion"] = {}
+    updated_gui_settings["globals"]["codec_conversion"]["conversion_flags"] = collected_conversion_flags
     slider_handled_conversion_flag_keys = [
-        "advanced.conversion_flags.aac.audio_bitrate",
-        "advanced.conversion_flags.flac.compression_level",
-        "advanced.conversion_flags.mp3.setting",
-        "advanced.conversion_flags.opus.b:a"
+        "codec_conversion.conversion_flags.aac.audio_bitrate",
+        "codec_conversion.conversion_flags.flac.compression_level",
+        "codec_conversion.conversion_flags.mp3.setting",
+        "codec_conversion.conversion_flags.opus.b:a"
     ]
 
     # Ensure hide_ffmpeg_warning is preserved even if the Global settings tab hasn't been opened yet
-    hide_ffmpeg_key = "advanced.hide_ffmpeg_warning"
+    hide_ffmpeg_key = "codec_conversion.hide_ffmpeg_warning"
     if hide_ffmpeg_key not in settings_vars.get("globals", {}):
-        current_val = current_settings.get("globals", {}).get("advanced", {}).get("hide_ffmpeg_warning")
+        current_val = current_settings.get("globals", {}).get("codec_conversion", {}).get("hide_ffmpeg_warning")
         if current_val is not None:
             if "globals" not in settings_vars: settings_vars["globals"] = {}
             settings_vars["globals"][hide_ffmpeg_key] = tkinter.BooleanVar(value=bool(current_val))
@@ -8849,7 +8876,7 @@ def save_settings(show_confirmation: bool = True):
             updated_gui_settings["globals"]["general"]["disabled_search_platforms"] = current_settings.get("globals", {}).get("general", {}).get("disabled_search_platforms", [])
             continue
 
-        if key_path_str == "advanced.codec_conversions":
+        if key_path_str == "codec_conversion.codec_conversions":
             if isinstance(var, dict):
                 keys = key_path_str.split('.')
                 temp_dict = updated_gui_settings["globals"]
@@ -8989,26 +9016,26 @@ def save_settings(show_confirmation: bool = True):
          error_list = "\\n - ".join(parse_errors)
          show_centered_messagebox("Settings Error", f"Could not save due to invalid values:\\n - {error_list}", dialog_type="error")
          return False
-    mapped_orpheus_updates = { "global": {"general": {},"formatting": {},"codecs": {},"covers": {},"playlist": {},"advanced": {},"module_defaults": {},"artist_downloading": {},"lyrics": {}}, "modules": {} }
+    mapped_orpheus_updates = { "global": {"general": {},"formatting": {},"codecs": {},"codec_conversion": {},"covers": {},"playlist": {},"advanced": {},"module_defaults": {},"artist_downloading": {},"lyrics": {}}, "modules": {} }
     gui_globals = updated_gui_settings.get("globals", {})
-    general_map_gui_to_orpheus = { "output_path": "download_path", "quality": "download_quality", "search_limit": "search_limit", "disabled_search_platforms": "disabled_search_platforms", "concurrent_downloads": "concurrent_downloads", "play_sound_on_finish": "play_sound_on_finish", "min_file_size_kb": "min_file_size_kb", "minimize_to_tray": "minimize_to_tray", "throttle_batch_size": "throttle_batch_size", "throttle_pause_seconds": "throttle_pause_seconds", "create_platform_folder": "create_platform_folder" }
+    general_map_gui_to_orpheus = { "output_path": "download_path", "quality": "download_quality", "search_limit": "search_limit", "disabled_search_platforms": "disabled_search_platforms", "concurrent_downloads": "concurrent_downloads", "play_sound_on_finish": "play_sound_on_finish", "min_file_size_kb": "min_file_size_kb", "minimize_to_tray": "minimize_to_tray", "throttle_batch_size": "throttle_batch_size", "throttle_pause_seconds": "throttle_pause_seconds", "create_platform_folder": "create_platform_folder", "disable_subscription_checks": "disable_subscription_checks", "ignore_existing_files": "ignore_existing_files", "reverify_existing_files": "reverify_existing_files" }
     if "general" in gui_globals:
         gui_general_section = gui_globals["general"]
         if "general" not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"]["general"] = {}
         for gui_key, orpheus_key in general_map_gui_to_orpheus.items():
             if gui_key in gui_general_section: mapped_orpheus_updates["global"]["general"][orpheus_key] = gui_general_section[gui_key]
-    if "globals" in updated_gui_settings and "advanced" in updated_gui_settings["globals"] and "conversion_flags" in updated_gui_settings["globals"]["advanced"]:
+    if "globals" in updated_gui_settings and "codec_conversion" in updated_gui_settings["globals"] and "conversion_flags" in updated_gui_settings["globals"]["codec_conversion"]:
         if "global" not in mapped_orpheus_updates: mapped_orpheus_updates["global"] = {}
-        if "advanced" not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"]["advanced"] = {}
+        if "codec_conversion" not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"]["codec_conversion"] = {}
         
-        mapped_orpheus_updates["global"]["advanced"]["conversion_flags"] = copy.deepcopy(updated_gui_settings["globals"]["advanced"]["conversion_flags"])
+        mapped_orpheus_updates["global"]["codec_conversion"]["conversion_flags"] = copy.deepcopy(updated_gui_settings["globals"]["codec_conversion"]["conversion_flags"])
 
     for section_key, section_data in gui_globals.items():
          if section_key != "general" and section_key in mapped_orpheus_updates["global"]:
              if isinstance(section_data, dict) and isinstance(mapped_orpheus_updates["global"].get(section_key), dict):
                   if section_key not in mapped_orpheus_updates["global"]: mapped_orpheus_updates["global"][section_key] = {}
                   for item_key, item_value in section_data.items():
-                      if section_key == "advanced" and item_key == "conversion_flags":
+                      if section_key == "codec_conversion" and item_key == "conversion_flags":
                           continue
                       mapped_orpheus_updates["global"][section_key][item_key] = item_value
     platform_map_to_orpheus = { "Bugs": "bugs", "Nugs": "nugs", "SoundCloud": "soundcloud", "TIDAL": "tidal", "Qobuz": "qobuz", "Deezer": "deezer", "Idagio": "idagio", "lrclib": "LRCLIB", "Napster": "napster", "Beatport": "beatport", "Beatsource": "beatsource", "Musixmatch": "musixmatch", "Spotify": "spotify", "Apple Music": "applemusic", "Amazon Music": "amazonmusic", "YouTube": "youtube" }
@@ -9097,25 +9124,47 @@ def save_settings(show_confirmation: bool = True):
                 for k in list(m_creds.keys()):
                     if k not in allowed: del m_creds[k]
 
+    # Drop migrated legacy keys so they don't linger in settings.json next to
+    # their new homes.
+    try:
+        _legacy_adv = final_settings_to_save.get("global", {}).get("advanced")
+        if isinstance(_legacy_adv, dict):
+            for _k in (
+                "cover_variance_threshold",
+                "disable_subscription_checks",
+                "ignore_existing_files",
+                "reverify_existing_files",
+                "ignore_different_artists",
+                "codec_conversions",
+                "conversion_flags",
+                "conversion_keep_original",
+                "enable_undesirable_conversions",
+                "ffmpeg_path",
+                "hide_ffmpeg_warning",
+            ):
+                _legacy_adv.pop(_k, None)
+    except Exception:
+        pass
+
     try:
         config_dir = os.path.dirname(CONFIG_FILE_PATH)
         if not os.path.exists(config_dir): os.makedirs(config_dir)
         with open(CONFIG_FILE_PATH, 'w', encoding='utf-8') as f: json.dump(final_settings_to_save, f, indent=4, ensure_ascii=False, sort_keys=True)
 
         deep_merge(current_settings, updated_gui_settings, keys_to_overwrite_if_dicts=["codec_conversions", "conversion_flags"])
-        if "globals" in updated_gui_settings and "advanced" in updated_gui_settings["globals"] and "conversion_flags" in updated_gui_settings["globals"]["advanced"]:
-            clean_conversion_flags_from_ui = updated_gui_settings["globals"]["advanced"]["conversion_flags"]
+        if "globals" in updated_gui_settings and "codec_conversion" in updated_gui_settings["globals"] and "conversion_flags" in updated_gui_settings["globals"]["codec_conversion"]:
+            clean_conversion_flags_from_ui = updated_gui_settings["globals"]["codec_conversion"]["conversion_flags"]
             if "globals" not in current_settings: current_settings["globals"] = {}
-            if "advanced" not in current_settings["globals"]: current_settings["globals"]["advanced"] = {}
-            if "conversion_flags" not in current_settings["globals"]["advanced"]: current_settings["globals"]["advanced"]["conversion_flags"] = {}
+            if "codec_conversion" not in current_settings["globals"]: current_settings["globals"]["codec_conversion"] = {}
+            if "conversion_flags" not in current_settings["globals"]["codec_conversion"]: current_settings["globals"]["codec_conversion"]["conversion_flags"] = {}
             if "aac" in clean_conversion_flags_from_ui:
-                current_settings["globals"]["advanced"]["conversion_flags"]["aac"] = clean_conversion_flags_from_ui["aac"].copy()
+                current_settings["globals"]["codec_conversion"]["conversion_flags"]["aac"] = clean_conversion_flags_from_ui["aac"].copy()
             if "flac" in clean_conversion_flags_from_ui:
-                current_settings["globals"]["advanced"]["conversion_flags"]["flac"] = clean_conversion_flags_from_ui["flac"].copy()
+                current_settings["globals"]["codec_conversion"]["conversion_flags"]["flac"] = clean_conversion_flags_from_ui["flac"].copy()
             if "mp3" in clean_conversion_flags_from_ui:
-                current_settings["globals"]["advanced"]["conversion_flags"]["mp3"] = clean_conversion_flags_from_ui["mp3"].copy()
+                current_settings["globals"]["codec_conversion"]["conversion_flags"]["mp3"] = clean_conversion_flags_from_ui["mp3"].copy()
             if "opus" in clean_conversion_flags_from_ui:
-                current_settings["globals"]["advanced"]["conversion_flags"]["opus"] = clean_conversion_flags_from_ui["opus"].copy()
+                current_settings["globals"]["codec_conversion"]["conversion_flags"]["opus"] = clean_conversion_flags_from_ui["opus"].copy()
         if orpheus_instance:
             try:
                 # To guarantee modules fetch the updated settings strings (like SoundCloud web_access_token),
@@ -12582,7 +12631,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
         yield_to_gui()
         fresh_orpheus_settings = orpheus.settings if hasattr(orpheus, 'settings') else {}
         fresh_global_settings = fresh_orpheus_settings.get('global', {})
-        ffmpeg_path_setting = fresh_global_settings.get("advanced", {}).get("ffmpeg_path", "ffmpeg")
+        ffmpeg_path_setting = fresh_global_settings.get("codec_conversion", {}).get("ffmpeg_path", "ffmpeg")
         if isinstance(ffmpeg_path_setting, str):
             ffmpeg_path_setting = ffmpeg_path_setting.strip()
             if ffmpeg_path_setting and ffmpeg_path_setting.lower() != "ffmpeg":
@@ -12614,6 +12663,9 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                     "throttle_batch_size": fresh_section.get("throttle_batch_size", default_section.get("throttle_batch_size", 0)),
                     "throttle_pause_seconds": fresh_section.get("throttle_pause_seconds", default_section.get("throttle_pause_seconds", 30)),
                     "create_platform_folder": fresh_section.get("create_platform_folder", default_section.get("create_platform_folder", False)),
+                    "disable_subscription_checks": fresh_section.get("disable_subscription_checks", fresh_global_settings.get("advanced", {}).get("disable_subscription_checks", default_section.get("disable_subscription_checks", False))),
+                    "ignore_existing_files": fresh_section.get("ignore_existing_files", fresh_global_settings.get("advanced", {}).get("ignore_existing_files", default_section.get("ignore_existing_files", False))),
+                    "reverify_existing_files": fresh_section.get("reverify_existing_files", fresh_global_settings.get("advanced", {}).get("reverify_existing_files", default_section.get("reverify_existing_files", False))),
                     "progress_bar": False,
                 }
                 # GUI log uses its own layout; disable tqdm bars so they do not pad lines before status text.
@@ -12622,23 +12674,33 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
                     set_progress_bars_enabled(False)
                 except Exception:
                     pass
+            elif section_key == "codec_conversion":
+                # Pull conversion settings from either the new section or the
+                # legacy advanced section so pre-migration configs keep working.
+                _legacy_conv = fresh_global_settings.get("advanced", {})
+                downloader_settings["codec_conversion"] = {
+                    **default_section,
+                    **{k: v for k, v in _legacy_conv.items() if k in default_section},
+                    **fresh_section,
+                }
             elif isinstance(default_section, dict):
                 # Merge section with defaults
                 downloader_settings[section_key] = {**default_section, **fresh_section}
             else:
                 # Non-dict section, use fresh value or default
                 downloader_settings[section_key] = fresh_section if fresh_section else default_section
-        if "advanced" in downloader_settings and \
-           "conversion_flags" in downloader_settings["advanced"] and \
-           "mp3" in downloader_settings["advanced"]["conversion_flags"]:
-            mp3_flags = downloader_settings["advanced"]["conversion_flags"]["mp3"]
+        if "codec_conversion" in downloader_settings and \
+           "conversion_flags" in downloader_settings["codec_conversion"] and \
+           "mp3" in downloader_settings["codec_conversion"]["conversion_flags"]:
+            mp3_flags = downloader_settings["codec_conversion"]["conversion_flags"]["mp3"]
+            _fresh_flags = fresh_global_settings.get("codec_conversion", {}).get("conversion_flags", {}) or fresh_global_settings.get("advanced", {}).get("conversion_flags", {})
             if "audio_bitrate" in mp3_flags and "qscale:a" in mp3_flags:
-                if fresh_global_settings.get("advanced",{}).get("conversion_flags",{}).get("mp3",{}).get("audio_bitrate"):
-                    cleaned_mp3_flags = {"audio_bitrate": fresh_global_settings["advanced"]["conversion_flags"]["mp3"]["audio_bitrate"]}
-                    downloader_settings["advanced"]["conversion_flags"]["mp3"] = cleaned_mp3_flags
-                elif fresh_global_settings.get("advanced",{}).get("conversion_flags",{}).get("mp3",{}).get("qscale:a"):
-                    cleaned_mp3_flags = {"qscale:a": fresh_global_settings["advanced"]["conversion_flags"]["mp3"]["qscale:a"]}
-                    downloader_settings["advanced"]["conversion_flags"]["mp3"] = cleaned_mp3_flags
+                if _fresh_flags.get("mp3", {}).get("audio_bitrate"):
+                    cleaned_mp3_flags = {"audio_bitrate": _fresh_flags["mp3"]["audio_bitrate"]}
+                    downloader_settings["codec_conversion"]["conversion_flags"]["mp3"] = cleaned_mp3_flags
+                elif _fresh_flags.get("mp3", {}).get("qscale:a"):
+                    cleaned_mp3_flags = {"qscale:a": _fresh_flags["mp3"]["qscale:a"]}
+                    downloader_settings["codec_conversion"]["conversion_flags"]["mp3"] = cleaned_mp3_flags
 
         # Prefer GUI session quality: `orpheus.settings` can lag after save (Orpheus rewrites
         # settings.json in update_module_storage() but does not replace self.settings). Search
@@ -13004,7 +13066,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
 
             if is_cancelled: print("\n|GRAY|Download Cancelled.|RESET|")
         except FileNotFoundError as fnf_e:
-            ffmpeg_path_setting = fresh_global_settings.get("advanced", {}).get("ffmpeg_path", "ffmpeg").strip()
+            ffmpeg_path_setting = fresh_global_settings.get("codec_conversion", {}).get("ffmpeg_path", "ffmpeg").strip()
             is_ffmpeg_error = False
             tb_str = traceback.format_exc()
             if "ffmpeg" in tb_str.lower():
@@ -13055,7 +13117,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             is_soundcloud_hls_ffmpeg_issue = True
 
         if is_soundcloud_hls_ffmpeg_issue:
-            ffmpeg_path_setting = fresh_global_settings.get("advanced", {}).get("ffmpeg_path", "ffmpeg").strip()
+            ffmpeg_path_setting = fresh_global_settings.get("codec_conversion", {}).get("ffmpeg_path", "ffmpeg").strip()
             user_msg = (
                 "\n[FFMPEG ERROR - SoundCloud HLS] FFmpeg was not found or is misconfigured.\nThis is required for processing SoundCloud HLS streams.\n\n"
                 "Possible Solutions:\n"
@@ -17124,8 +17186,8 @@ def _update_settings_tab_widgets():
         print("Refreshing Global Settings tab UI from current_settings...")
     try:
         for key, var in settings_vars.get("globals", {}).items():
-            if key == "advanced.codec_conversions":
-                current_codec_conversions_setting = current_settings.get("globals", {}).get("advanced", {}).get("codec_conversions", {})
+            if key == "codec_conversion.codec_conversions":
+                current_codec_conversions_setting = current_settings.get("globals", {}).get("codec_conversion", {}).get("codec_conversions", {})
                 
                 if isinstance(var, dict) and isinstance(current_codec_conversions_setting, dict):
                     for source_codec_from_settings, target_codec_from_settings in current_codec_conversions_setting.items():
@@ -17168,22 +17230,22 @@ def _update_settings_tab_widgets():
                     print(f"Error setting variable for {key}: {e_set_other}")
 
         # Refresh specific advanced settings (sliders, etc.)
-        aac_br_var = settings_vars.get("globals", {}).get("advanced.conversion_flags.aac.audio_bitrate")
+        aac_br_var = settings_vars.get("globals", {}).get("codec_conversion.conversion_flags.aac.audio_bitrate")
         if aac_br_var and isinstance(aac_br_var, tkinter.StringVar):
-            aac_default_val = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["aac"]["audio_bitrate"]
-            aac_current_br_from_settings = str(current_settings.get("globals", {}).get("advanced", {}).get("conversion_flags", {}).get("aac", {}).get("audio_bitrate", aac_default_val))
+            aac_default_val = DEFAULT_SETTINGS["globals"]["codec_conversion"]["conversion_flags"]["aac"]["audio_bitrate"]
+            aac_current_br_from_settings = str(current_settings.get("globals", {}).get("codec_conversion", {}).get("conversion_flags", {}).get("aac", {}).get("audio_bitrate", aac_default_val))
             aac_br_var.set(aac_current_br_from_settings)
             
-        flac_cl_var = settings_vars.get("globals", {}).get("advanced.conversion_flags.flac.compression_level")
+        flac_cl_var = settings_vars.get("globals", {}).get("codec_conversion.conversion_flags.flac.compression_level")
         if flac_cl_var and isinstance(flac_cl_var, tkinter.StringVar):
-            flac_default_val = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["flac"]["compression_level"]
-            flac_current_cl_from_settings = str(current_settings.get("globals", {}).get("advanced", {}).get("conversion_flags", {}).get("flac", {}).get("compression_level", flac_default_val))
+            flac_default_val = DEFAULT_SETTINGS["globals"]["codec_conversion"]["conversion_flags"]["flac"]["compression_level"]
+            flac_current_cl_from_settings = str(current_settings.get("globals", {}).get("codec_conversion", {}).get("conversion_flags", {}).get("flac", {}).get("compression_level", flac_default_val))
             flac_cl_var.set(flac_current_cl_from_settings)
             
-        mp3_setting_var = settings_vars.get("globals", {}).get("advanced.conversion_flags.mp3.setting")
+        mp3_setting_var = settings_vars.get("globals", {}).get("codec_conversion.conversion_flags.mp3.setting")
         if mp3_setting_var and isinstance(mp3_setting_var, tkinter.StringVar):
-            mp3_conf_flags_loaded = current_settings.get("globals", {}).get("advanced", {}).get("conversion_flags", {}).get("mp3", {})
-            mp3_default_conf_flags_loaded = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["mp3"]
+            mp3_conf_flags_loaded = current_settings.get("globals", {}).get("codec_conversion", {}).get("conversion_flags", {}).get("mp3", {})
+            mp3_default_conf_flags_loaded = DEFAULT_SETTINGS["globals"]["codec_conversion"]["conversion_flags"]["mp3"]
             
             resolved_display_val = None
             if isinstance(mp3_conf_flags_loaded, dict):
@@ -17197,10 +17259,10 @@ def _update_settings_tab_widgets():
                 resolved_display_val = "VBR -V0"
             mp3_setting_var.set(resolved_display_val)
         
-        opus_br_var = settings_vars.get("globals", {}).get("advanced.conversion_flags.opus.b:a")
+        opus_br_var = settings_vars.get("globals", {}).get("codec_conversion.conversion_flags.opus.b:a")
         if opus_br_var and isinstance(opus_br_var, tkinter.StringVar):
-            opus_default_val = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["opus"]["b:a"]
-            opus_current_br_from_settings = str(current_settings.get("globals", {}).get("advanced", {}).get("conversion_flags", {}).get("opus", {}).get("b:a", opus_default_val))
+            opus_default_val = DEFAULT_SETTINGS["globals"]["codec_conversion"]["conversion_flags"]["opus"]["b:a"]
+            opus_current_br_from_settings = str(current_settings.get("globals", {}).get("codec_conversion", {}).get("conversion_flags", {}).get("opus", {}).get("b:a", opus_default_val))
             opus_br_var.set(opus_current_br_from_settings)
         
         if 'path_var_main' in globals() and isinstance(path_var_main, tkinter.Variable) and "general.output_path" not in settings_vars.get("globals", {}):
@@ -19816,7 +19878,7 @@ def validate_codec_conversions():
     global settings_vars
     
     try:
-        codec_vars = settings_vars.get("globals", {}).get("advanced.codec_conversions", {})
+        codec_vars = settings_vars.get("globals", {}).get("codec_conversion.codec_conversions", {})
         if not isinstance(codec_vars, dict):
             return True
         conversions = {}
@@ -20189,6 +20251,9 @@ if __name__ == "__main__":
                     "throttle_batch_size": 0,
                     "throttle_pause_seconds": 30,
                     "create_platform_folder": False,
+                    "disable_subscription_checks": False,
+                    "ignore_existing_files": False,
+                    "reverify_existing_files": False,
                 },
                 "artist_downloading": {
                     "return_credited_albums": True,
@@ -20197,19 +20262,14 @@ if __name__ == "__main__":
                     "merge_same_name_albums": False,
                     "explicit_content": "prefer_explicit",
                 },
-                "formatting": { "discography_format": "{name} {quality}", "album_format": "{artist}/{name}", "playlist_format": "{name}", "track_filename_format": "{track_number}. {artist} - {name}", "playlist_track_filename_format": "", "single_full_path_format": "{artist} - {name}", "metadata_separator": ", ", "filename_separator": "", "split_metadata": False, "enable_zfill": True, "force_album_format": False, "use_album_artist_for_discography": False, "use_playlist_position": False, "use_album_position": False },
+                "formatting": { "discography_format": "{name} {quality}", "album_format": "{artist}/{name}", "playlist_format": "{name}", "force_album_format": False, "use_album_artist_for_discography": False, "track_filename_format": "{track_number}. {artist} - {name}", "playlist_track_filename_format": "", "single_full_path_format": "{artist} - {name}", "enable_zfill": True, "use_playlist_position": False, "use_album_position": False, "filename_separator": "", "metadata_separator": ", ", "split_metadata": False },
                 "codecs": {
                     "proprietary_codecs": False,
                     "spatial_codecs": True,
                     "include_dolby_atmos": False,
                 },
-                "module_defaults": { "lyrics": "default", "covers": "default", "credits": "default" },
-                "lyrics": { "embed_lyrics": True, "embed_synced_lyrics": False, "save_synced_lyrics": True },
-                "covers": { "embed_cover": True, "main_compression": "high", "main_resolution": 1400, "save_original_cover_size": False, "save_external": False, "external_format": "png", "external_compression": "low", "external_resolution": 3000, "save_animated_cover": True },
-                "playlist": { "save_m3u": True, "paths_m3u": "absolute", "extended_m3u": True, "group_by_album": False, "m3u_only": False, "sync": False, "sync_remove_orphaned": False },
-                "advanced": {
-                    "advanced_login_system": False,
-                    "codec_conversions": { "alac": "flac", "wav": "flac", "vorbis": "vorbis" }, 
+                "codec_conversion": {
+                    "codec_conversions": { "alac": "flac", "wav": "flac", "vorbis": "vorbis" },
                     "conversion_flags": {
                         "flac": { "compression_level": 5 },
                         "mp3": { "qscale:a": "0" },
@@ -20218,14 +20278,16 @@ if __name__ == "__main__":
                     },
                     "conversion_keep_original": False,
                     "ffmpeg_path": "ffmpeg",
-                    "cover_variance_threshold": 8,
-                    "debug_mode": False,
-                    "disable_subscription_checks": False,
                     "enable_undesirable_conversions": False,
-                    "ignore_existing_files": False,
-                    "reverify_existing_files": False,
-                    "ignore_different_artists": True,
-                    "hide_ffmpeg_warning": False
+                    "hide_ffmpeg_warning": False,
+                },
+                "module_defaults": { "lyrics": "default", "covers": "default", "credits": "default" },
+                "lyrics": { "embed_lyrics": True, "embed_synced_lyrics": False, "save_synced_lyrics": True },
+                "covers": { "embed_cover": True, "main_compression": "high", "main_resolution": 1400, "save_original_cover_size": False, "save_external": False, "external_format": "png", "external_compression": "low", "external_resolution": 3000, "save_animated_cover": True },
+                "playlist": { "save_m3u": True, "paths_m3u": "absolute", "extended_m3u": True, "group_by_album": False, "m3u_only": False, "sync": False, "sync_remove_orphaned": False },
+                "advanced": {
+                    "advanced_login_system": False,
+                    "debug_mode": False,
                 }
             },
             "credentials": {
@@ -21279,24 +21341,22 @@ if __name__ == "__main__":
             "playlist.sync": "Skip tracks already on disk and detect tracks that were removed from the playlist since the last sync (uses a .orpheus_sync.json manifest in the playlist folder).",
             "playlist.sync_remove_orphaned": "When syncing, delete local files for tracks that are no longer in the playlist.",
             "advanced.advanced_login_system": "Enable advanced login system (Use only if instructed by module documentation).",
-            "advanced.ffmpeg_path": "Full path to the ffmpeg executable \nIf set to just 'ffmpeg', it's assumed to be in the system PATH.\nThis is used for codec conversions.",
-            "advanced.codec_conversions": "Defines automatic codec remapping before save (for example: alac -> flac).\nLeft dropdown = source codec from module, right dropdown = target codec to convert to.",
-            "advanced.conversion_keep_original": "Keep the original file after successful codec conversion.",
-            "advanced.cover_variance_threshold": "Tolerance for accepting covers with slightly different sizes (0-100).",
+            "codec_conversion.ffmpeg_path": "Full path to the ffmpeg executable \nIf set to just 'ffmpeg', it's assumed to be in the system PATH.\nThis is used for codec conversions.",
+            "codec_conversion.codec_conversions": "Defines automatic codec remapping before save (for example: alac -> flac).\nLeft dropdown = source codec from module, right dropdown = target codec to convert to.",
+            "codec_conversion.conversion_keep_original": "Keep the original file after successful codec conversion.",
             "advanced.debug_mode": "Allows various detailed informational and diagnostic messages to be printed to the console.\nIntended for troubleshooting issues only.",
-            "advanced.disable_subscription_checks": "Prevents from checking if subscription for music service you are trying to download from is active.",
-            "advanced.enable_undesirable_conversions": """Controls allowance to perform codec conversions that might result in quality loss or are not recommended.
+            "general.disable_subscription_checks": "Prevents from checking if subscription for music service you are trying to download from is active.",
+            "codec_conversion.enable_undesirable_conversions": """Controls allowance to perform codec conversions that might result in quality loss or are not recommended.
 Examples:
 Lossy-to-Lossy
 Lossless-to-Lossy (if not preferred)
 Unnecessary Lossless-to-Lossless""",
-            "advanced.ignore_existing_files": "Skips downloading a track only when its exact target file path already exists.\nDifferent album editions (e.g. Standard vs Deluxe) are saved to separate folders when they share a name, so one edition is not left half-skipped because of the other.\nWhen off, existing files at the same path are overwritten.",
-            "advanced.reverify_existing_files": "When skipping existing files is enabled, re-checks each existing file's duration against the expected track duration.\nIf the durations don't match (e.g. a stale or untagged leftover from an older version), the file is removed and re-downloaded so its tags are refreshed.\nFiles whose duration matches are still skipped as usual.",
-            "advanced.ignore_different_artists": "When downloading albums, ignore tracks where the artist differs from the main album artist.",
-            "advanced.hide_ffmpeg_warning": "Hide the warning message that appears when FFmpeg is not found on the system.",
-            "advanced.conversion_flags.aac.audio_bitrate": "Set AAC audio bitrate. Higher is better quality but larger file. Options: 128k, 192k, 256k, 320k.",
-            "advanced.conversion_flags.flac.compression_level": "Set FLAC compression level (0-8). Higher level means smaller file but slower encoding, 0 is fastest, 8 is smallest.",
-            "advanced.conversion_flags.opus.b:a": "Set OPUS audio bitrate. Higher is better quality but larger file. Options: 64k, 96k, 128k, 160k, 192k, 256k, 320k."
+            "general.ignore_existing_files": "Skips downloading a track only when its exact target file path already exists.\nDifferent album editions (e.g. Standard vs Deluxe) are saved to separate folders when they share a name, so one edition is not left half-skipped because of the other.\nWhen off, existing files at the same path are overwritten.",
+            "general.reverify_existing_files": "When skipping existing files is enabled, re-checks each existing file's duration against the expected track duration.\nIf the durations don't match (e.g. a stale or untagged leftover from an older version), the file is removed and re-downloaded so its tags are refreshed.\nFiles whose duration matches are still skipped as usual.",
+            "codec_conversion.hide_ffmpeg_warning": "Hide the warning message that appears when FFmpeg is not found on the system.",
+            "codec_conversion.conversion_flags.aac.audio_bitrate": "Set AAC audio bitrate. Higher is better quality but larger file. Options: 128k, 192k, 256k, 320k.",
+            "codec_conversion.conversion_flags.flac.compression_level": "Set FLAC compression level (0-8). Higher level means smaller file but slower encoding, 0 is fastest, 8 is smallest.",
+            "codec_conversion.conversion_flags.opus.b:a": "Set OPUS audio bitrate. Higher is better quality but larger file. Options: 64k, 96k, 128k, 160k, 192k, 256k, 320k."
         }
 
         _album_template_vars = (
@@ -21349,7 +21409,7 @@ Unnecessary Lossless-to-Lossless""",
             "upc": "074643579324",
             "release_year": "1982",
             "release_date": "1982-11-30",
-            "explicit": "",
+            "explicit": " 🅴",
             "quality": "FLAC",
             "platform": "Apple Music",
             "creator": "Sample Curator",
@@ -21420,27 +21480,32 @@ Unnecessary Lossless-to-Lossless""",
                 preview_frame,
                 text="▼ Variables",
                 width=100, height=24,
-                fg_color=BUTTON_COLOR,
+                fg_color="#2B2B2B",
                 hover_color=LINK_COLOR,
                 # Same text color as the Save button (the CTkButton theme default).
                 text_color=customtkinter.ThemeManager.theme["CTkButton"]["text_color"],
-                font=("Segoe UI", 10),
+                font=("Consolas", 10),
                 command=_toggle,
             )
             toggle_btn.pack(side="right", padx=(12, 0))
 
-            details_frame = customtkinter.CTkFrame(parent, fg_color="transparent")
-            details_frame.grid(row=row, column=1, columnspan=2, sticky="ew", padx=(10, 5), pady=(4, 12))
-            details_frame.grid_columnconfigure(0, weight=1)
-            details_frame.grid_columnconfigure(1, weight=1)
+            details_frame = customtkinter.CTkFrame(parent, fg_color=DARKER_SURFACE_COLOR, corner_radius=6)
+            details_frame.grid(row=row, column=1, sticky="ew", padx=(5, 5), pady=(4, 12))
             details_frame.grid_remove()
+
+            # Inner padding container so the variable tokens sit inset from the
+            # dark rounded panel edge instead of flush against it.
+            _vars_inner = customtkinter.CTkFrame(details_frame, fg_color="transparent")
+            _vars_inner.pack(fill="both", expand=True, padx=10, pady=(8, 10))
+            _vars_inner.grid_columnconfigure(0, weight=1)
+            _vars_inner.grid_columnconfigure(1, weight=1)
 
             for _i, _line in enumerate(ln for ln in text.split("\n") if ln.strip()):
                 if " — " in _line:
                     _var_part, _desc_part = _line.split(" — ", 1)
                 else:
                     _var_part, _desc_part = _line, ""
-                _row = customtkinter.CTkFrame(details_frame, fg_color="transparent")
+                _row = customtkinter.CTkFrame(_vars_inner, fg_color="transparent")
                 _row.grid(row=_i // 2, column=_i % 2, sticky="w", padx=(0, 24), pady=1)
                 _var_label = customtkinter.CTkLabel(
                     _row, text=_var_part, text_color=LINK_COLOR,
@@ -21482,20 +21547,20 @@ Unnecessary Lossless-to-Lossless""",
         _formatting_sub_headers = {
             "discography_format": ("📁", "Folder / path templates", "Controls how download folders are named and nested."),
             "track_filename_format": ("📄", "File name templates", "Controls how the track files inside those folders are named."),
-            "metadata_separator": ("⚙", "Other options", "Separators, number padding, and how the templates are applied."),
+            "metadata_separator": ("🏷", "Metadata / tags", "Controls how multi-value fields are joined and stored in tags."),
         }
 
         for section_key, section_value in DEFAULT_SETTINGS["globals"].items():
             if isinstance(section_value, dict):
                 customtkinter.CTkLabel(global_settings_frame, text=section_key.replace("_", " ").upper(), text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11)).grid(row=row, column=0, columnspan=3, sticky="w", padx=(0, 10), pady=(10, 5)); row += 1
-                # Tracks widgets of the collapsible "Other options" group (Formatting).
+                # Tracks widgets of the collapsible "Metadata / tags" group (Formatting).
                 # The group starts expanded; the toggle collapses it.
                 _options_group = {"active": False, "open": True, "widgets": [], "toggle": None}
                 for field, default_value in section_value.items():
                     _sub_header_info = _formatting_sub_headers.get(field)
                     if _sub_header_info:
                         if field == "metadata_separator":
-                            # "Other options" is collapsible; its header row sits on a
+                            # "Metadata / tags" is collapsible; its header row sits on a
                             # dark full-width strip. The header labels must carry the
                             # same fg_color: CTkLabels with fg_color="transparent" paint
                             # the parent's background as an opaque rectangle, which would
@@ -21503,18 +21568,18 @@ Unnecessary Lossless-to-Lossless""",
                             # matching fg_color the row reads as one clean band.
                             # height=1: an empty CTkFrame otherwise requests 200px and
                             # would blow the row up into a giant dark block.
-                            customtkinter.CTkFrame(global_settings_frame, fg_color=DARKER_SURFACE_COLOR, corner_radius=0, height=1).grid(row=row, column=0, columnspan=3, sticky="nsew", padx=(5, 5), pady=(12, 12))
+                            customtkinter.CTkFrame(global_settings_frame, fg_color=SUBHEADER_BAND_COLOR, corner_radius=0, height=1).grid(row=row, column=0, columnspan=3, sticky="nsew", padx=(5, 5), pady=(12, 12))
                             # Icon and title are separate labels packed with a fixed
                             # pixel gap (glyph widths differ per emoji, so spaces in one
                             # string would misalign the headers).
                             _sub_icon, _sub_title, _sub_explainer = _sub_header_info
-                            _header_frame = customtkinter.CTkFrame(global_settings_frame, fg_color=DARKER_SURFACE_COLOR, corner_radius=0)
+                            _header_frame = customtkinter.CTkFrame(global_settings_frame, fg_color=SUBHEADER_BAND_COLOR, corner_radius=0)
                             _header_frame.grid(row=row, column=0, sticky="w", padx=(15, 10), pady=(12, 12))
-                            _group_icon = customtkinter.CTkLabel(_header_frame, text=_sub_icon, text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), fg_color=DARKER_SURFACE_COLOR, width=20, anchor="center")
+                            _group_icon = customtkinter.CTkLabel(_header_frame, text=_sub_icon, text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), fg_color=SUBHEADER_BAND_COLOR, width=20, anchor="center")
                             _group_icon.pack(side="left")
-                            _group_toggle = customtkinter.CTkLabel(_header_frame, text=_sub_title.upper(), text_color=GRAY_TEXT_COLOR, cursor=HAND_CURSOR_LINK, font=("Segoe UI", 11), fg_color=DARKER_SURFACE_COLOR)
+                            _group_toggle = customtkinter.CTkLabel(_header_frame, text=_sub_title.upper(), text_color=GRAY_TEXT_COLOR, cursor=HAND_CURSOR_LINK, font=("Segoe UI", 11), fg_color=SUBHEADER_BAND_COLOR)
                             _group_toggle.pack(side="left", padx=(8, 0))
-                            customtkinter.CTkLabel(global_settings_frame, text=_sub_explainer, text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), anchor="w", justify="left", wraplength=900, fg_color=DARKER_SURFACE_COLOR).grid(row=row, column=1, columnspan=2, sticky="w", padx=(5, 10), pady=(12, 12))
+                            customtkinter.CTkLabel(global_settings_frame, text=_sub_explainer, text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), anchor="w", justify="left", wraplength=900, fg_color=SUBHEADER_BAND_COLOR).grid(row=row, column=1, columnspan=2, sticky="w", padx=(5, 10), pady=(12, 12))
                             row += 1
 
                             def _toggle_options_group(_event=None, group=_options_group):
@@ -21540,22 +21605,22 @@ Unnecessary Lossless-to-Lossless""",
                             # would cover the strip and leave a two-color patchwork.
                             # height=1: an empty CTkFrame otherwise requests 200px and
                             # would blow the row up into a giant dark block.
-                            customtkinter.CTkFrame(global_settings_frame, fg_color=DARKER_SURFACE_COLOR, corner_radius=0, height=1).grid(row=row, column=0, columnspan=3, sticky="nsew", padx=(5, 5), pady=(12, 12))
+                            customtkinter.CTkFrame(global_settings_frame, fg_color=SUBHEADER_BAND_COLOR, corner_radius=0, height=1).grid(row=row, column=0, columnspan=3, sticky="nsew", padx=(5, 5), pady=(12, 12))
                             # Icon and title as separate labels with a fixed pixel gap
                             # (see the metadata branch for why spaces don't align emoji).
                             _sub_icon, _sub_title, _sub_explainer = _sub_header_info
-                            _header_frame = customtkinter.CTkFrame(global_settings_frame, fg_color=DARKER_SURFACE_COLOR, corner_radius=0)
+                            _header_frame = customtkinter.CTkFrame(global_settings_frame, fg_color=SUBHEADER_BAND_COLOR, corner_radius=0)
                             _header_frame.grid(row=row, column=0, sticky="w", padx=(15, 10), pady=(12, 12))
-                            customtkinter.CTkLabel(_header_frame, text=_sub_icon, text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), fg_color=DARKER_SURFACE_COLOR, width=20, anchor="center").pack(side="left")
-                            customtkinter.CTkLabel(_header_frame, text=_sub_title.upper(), text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), fg_color=DARKER_SURFACE_COLOR).pack(side="left", padx=(8, 0))
-                            customtkinter.CTkLabel(global_settings_frame, text=_sub_explainer, text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), anchor="w", justify="left", wraplength=900, fg_color=DARKER_SURFACE_COLOR).grid(row=row, column=1, columnspan=2, sticky="w", padx=(5, 10), pady=(12, 12))
+                            customtkinter.CTkLabel(_header_frame, text=_sub_icon, text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), fg_color=SUBHEADER_BAND_COLOR, width=20, anchor="center").pack(side="left")
+                            customtkinter.CTkLabel(_header_frame, text=_sub_title.upper(), text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), fg_color=SUBHEADER_BAND_COLOR).pack(side="left", padx=(8, 0))
+                            customtkinter.CTkLabel(global_settings_frame, text=_sub_explainer, text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11), anchor="w", justify="left", wraplength=900, fg_color=SUBHEADER_BAND_COLOR).grid(row=row, column=1, columnspan=2, sticky="w", padx=(5, 10), pady=(12, 12))
                             row += 1
                     current_value = current_settings["globals"].get(section_key, {}).get(field, default_value); full_key = f"{section_key}.{field}"
-                    if full_key == "advanced.conversion_flags":
+                    if full_key == "codec_conversion.conversion_flags":
                         aac_label_text = "AAC Audio Bitrate"
-                        aac_full_key = "advanced.conversion_flags.aac.audio_bitrate"
-                        aac_default_val = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["aac"]["audio_bitrate"]
-                        aac_current_val = str(current_settings["globals"].get("advanced", {}).get("conversion_flags", {}).get("aac", {}).get("audio_bitrate", aac_default_val))
+                        aac_full_key = "codec_conversion.conversion_flags.aac.audio_bitrate"
+                        aac_default_val = DEFAULT_SETTINGS["globals"]["codec_conversion"]["conversion_flags"]["aac"]["audio_bitrate"]
+                        aac_current_val = str(current_settings["globals"].get("codec_conversion", {}).get("conversion_flags", {}).get("aac", {}).get("audio_bitrate", aac_default_val))
                         
                         aac_label = customtkinter.CTkLabel(global_settings_frame, text=aac_label_text)
                         aac_label.grid(row=row, column=0, sticky="w", padx=(20, 10), pady=2)
@@ -21588,9 +21653,9 @@ Unnecessary Lossless-to-Lossless""",
                         CTkToolTip(aac_slider_frame, message=tooltip_aac_text, bg_color=TOOLTIP_MENU_BG, text_color=WHITE_TEXT_COLOR, padx=12, pady=12)
                         row += 1
                         flac_label_text = "FLAC Compression Level"
-                        flac_full_key = "advanced.conversion_flags.flac.compression_level"
-                        flac_default_val = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["flac"]["compression_level"]
-                        flac_current_val = int(current_settings["globals"].get("advanced", {}).get("conversion_flags", {}).get("flac", {}).get("compression_level", flac_default_val))
+                        flac_full_key = "codec_conversion.conversion_flags.flac.compression_level"
+                        flac_default_val = DEFAULT_SETTINGS["globals"]["codec_conversion"]["conversion_flags"]["flac"]["compression_level"]
+                        flac_current_val = int(current_settings["globals"].get("codec_conversion", {}).get("conversion_flags", {}).get("flac", {}).get("compression_level", flac_default_val))
 
                         flac_label = customtkinter.CTkLabel(global_settings_frame, text=flac_label_text)
                         flac_label.grid(row=row, column=0, sticky="w", padx=(20, 10), pady=2)
@@ -21618,9 +21683,9 @@ Unnecessary Lossless-to-Lossless""",
                         CTkToolTip(flac_slider_frame, message=tooltip_flac_text, bg_color=TOOLTIP_MENU_BG, text_color=WHITE_TEXT_COLOR, padx=12, pady=12)
                         row += 1
                         mp3_label_text = "MP3 Encoding"
-                        mp3_setting_key = "advanced.conversion_flags.mp3.setting"
-                        mp3_conf_flags = current_settings["globals"].get("advanced", {}).get("conversion_flags", {}).get("mp3", {})
-                        mp3_default_conf_flags = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["mp3"]
+                        mp3_setting_key = "codec_conversion.conversion_flags.mp3.setting"
+                        mp3_conf_flags = current_settings["globals"].get("codec_conversion", {}).get("conversion_flags", {}).get("mp3", {})
+                        mp3_default_conf_flags = DEFAULT_SETTINGS["globals"]["codec_conversion"]["conversion_flags"]["mp3"]
 
                         mp3_options_list = ["128k", "192k", "256k", "320k", "VBR -V0"]
                         mp3_options_map = {val: i for i, val in enumerate(mp3_options_list)}
@@ -21639,8 +21704,8 @@ Unnecessary Lossless-to-Lossless""",
 
                         mp3_var = tkinter.StringVar(value=current_mp3_display_val)
                         settings_vars["globals"][mp3_setting_key] = mp3_var
-                        settings_vars["globals"].pop("advanced.conversion_flags.mp3.qscale:a", None)
-                        settings_vars["globals"].pop("advanced.conversion_flags.mp3.audio_bitrate", None)
+                        settings_vars["globals"].pop("codec_conversion.conversion_flags.mp3.qscale:a", None)
+                        settings_vars["globals"].pop("codec_conversion.conversion_flags.mp3.audio_bitrate", None)
 
                         # Value label in column 2 (like Browse button position)
                         mp3_value_disp_label = customtkinter.CTkLabel(global_settings_frame, text=current_mp3_display_val, width=100, anchor="center")
@@ -21655,15 +21720,15 @@ Unnecessary Lossless-to-Lossless""",
                         mp3_slider_widget = customtkinter.CTkSlider(mp3_slider_frame, from_=0, to=len(mp3_options_list)-1, number_of_steps=len(mp3_options_list)-1, command=_update_mp3_slider_display)
                         mp3_slider_widget.set(mp3_slider_pos)
                         mp3_slider_widget.grid(row=0, column=0, sticky="ew")
-                        tooltip_mp3_text = tooltip_texts.get("advanced.conversion_flags.mp3.setting", "MP3 Encoding Settings:\n128k-320k are Constant Bitrate (CBR).\nVBR -V0 uses qscale:a 0 for highest variable bitrate quality.")
+                        tooltip_mp3_text = tooltip_texts.get("codec_conversion.conversion_flags.mp3.setting", "MP3 Encoding Settings:\n128k-320k are Constant Bitrate (CBR).\nVBR -V0 uses qscale:a 0 for highest variable bitrate quality.")
                         CTkToolTip(mp3_label, message=tooltip_mp3_text, bg_color=TOOLTIP_MENU_BG, text_color=WHITE_TEXT_COLOR, padx=12, pady=12)
                         CTkToolTip(mp3_slider_frame, message=tooltip_mp3_text, bg_color=TOOLTIP_MENU_BG, text_color=WHITE_TEXT_COLOR, padx=12, pady=12)
                         row += 1
                         
                         opus_label_text = "OPUS Audio Bitrate"
-                        opus_full_key = "advanced.conversion_flags.opus.b:a"
-                        opus_default_val = DEFAULT_SETTINGS["globals"]["advanced"]["conversion_flags"]["opus"]["b:a"]
-                        opus_current_val = str(current_settings["globals"].get("advanced", {}).get("conversion_flags", {}).get("opus", {}).get("b:a", opus_default_val))
+                        opus_full_key = "codec_conversion.conversion_flags.opus.b:a"
+                        opus_default_val = DEFAULT_SETTINGS["globals"]["codec_conversion"]["conversion_flags"]["opus"]["b:a"]
+                        opus_current_val = str(current_settings["globals"].get("codec_conversion", {}).get("conversion_flags", {}).get("opus", {}).get("b:a", opus_default_val))
                         
                         opus_label = customtkinter.CTkLabel(global_settings_frame, text=opus_label_text)
                         opus_label.grid(row=row, column=0, sticky="w", padx=(20, 10), pady=2)
@@ -22007,37 +22072,7 @@ Unnecessary Lossless-to-Lossless""",
                             relative_radio.pack(side="left")
                             
                             widget = radio_frame
-                         elif section_key == "advanced" and field == "cover_variance_threshold":
-                            try:
-                                current_threshold = int(var.get())
-                                if current_threshold < 0 or current_threshold > 100:
-                                    current_threshold = 0
-                            except (ValueError, TypeError):
-                                current_threshold = 0
-                            
-                            current_threshold = round(current_threshold / 2) * 2
-                            
-                            slider_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
-                            slider_frame.grid(row=row, column=1, sticky="ew", padx=(5, 5), pady=5)
-                            slider_frame.grid_columnconfigure(0, weight=1)
-                            
-                            # Value label in column 2 (like Browse button position)
-                            value_label = customtkinter.CTkLabel(global_settings_frame, text=f"{current_threshold}%", width=100, anchor="center")
-                            value_label.grid(row=row, column=2, sticky="e", padx=(5, 5))
-                            
-                            def update_threshold_value(value, var_ref=var, label_ref=value_label):
-                                int_value = round(value / 2) * 2
-                                var_ref.set(str(int_value))
-                                label_ref.configure(text=f"{int_value}%")
-                            
-                            slider = customtkinter.CTkSlider(slider_frame, from_=0, to=100, number_of_steps=50, command=update_threshold_value)
-                            slider.set(current_threshold)
-                            slider.grid(row=0, column=0, sticky="ew")
-                            
-                            var.set(str(current_threshold))
-
-                            widget = slider_frame
-                         elif section_key == "advanced" and field == "ffmpeg_path":
+                         elif section_key == "codec_conversion" and field == "ffmpeg_path":
                             ffmpeg_path_frame = customtkinter.CTkFrame(global_settings_frame, fg_color="transparent")
                             ffmpeg_path_frame.grid(row=row, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
                             ffmpeg_path_frame.grid_columnconfigure(0, weight=1)
@@ -22371,7 +22406,7 @@ Unnecessary Lossless-to-Lossless""",
         if platform.system() in ('Windows', 'Darwin', 'Linux'):
             # Moved check to background thread to avoid blocking the main UI thread during initialization
             def _run_ffmpeg_check_and_show_warning():
-                configured = current_settings.get("globals", {}).get("advanced", {}).get("ffmpeg_path", "ffmpeg")
+                configured = current_settings.get("globals", {}).get("codec_conversion", {}).get("ffmpeg_path", "ffmpeg")
                 if not locate_ffmpeg(configured, extra_search_dirs=_ffmpeg_search_directories()):
                     try:
                         app.after(1000, _show_ffmpeg_install_message)
@@ -22381,7 +22416,7 @@ Unnecessary Lossless-to-Lossless""",
             if True: # Keep indentation for the large function block below
                 def _show_ffmpeg_install_message():
                     # Check if user chose to hide this message
-                    if current_settings.get("globals", {}).get("advanced", {}).get("hide_ffmpeg_warning", False):
+                    if current_settings.get("globals", {}).get("codec_conversion", {}).get("hide_ffmpeg_warning", False):
                         return
                     
                     dialog = customtkinter.CTkToplevel(app)
@@ -22723,9 +22758,9 @@ Unnecessary Lossless-to-Lossless""",
                             # Save preference to settings
                             if "globals" not in current_settings:
                                 current_settings["globals"] = {}
-                            if "advanced" not in current_settings["globals"]:
-                                current_settings["globals"]["advanced"] = {}
-                            current_settings["globals"]["advanced"]["hide_ffmpeg_warning"] = True
+                            if "codec_conversion" not in current_settings["globals"]:
+                                current_settings["globals"]["codec_conversion"] = {}
+                            current_settings["globals"]["codec_conversion"]["hide_ffmpeg_warning"] = True
                             
                             # Also update settings_vars so save_settings() picks it up
                             if "globals" not in settings_vars:
@@ -22733,7 +22768,7 @@ Unnecessary Lossless-to-Lossless""",
                             
                             # Create a BooleanVar for the setting if it doesn't exist
                             # This ensures save_settings() sees the change
-                            settings_vars["globals"]["advanced.hide_ffmpeg_warning"] = tkinter.BooleanVar(value=True)
+                            settings_vars["globals"]["codec_conversion.hide_ffmpeg_warning"] = tkinter.BooleanVar(value=True)
                             
                             save_settings(show_confirmation=False)
                         _destroy_dialog(dialog)
