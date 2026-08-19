@@ -11368,6 +11368,38 @@ def _setup_url_entry_drag_drop(entry_widget):
             print(f"[DnD] pywinstyles drop setup failed: {e}")
 
 
+# In-memory only: the last text file picked via the "..." browse button, so the
+# next pick opens in the same folder. Not persisted — resets when the app exits.
+_last_urls_file_path = ""
+
+def browse_urls_file():
+    """Open a file picker for a text file containing URLs and put its path into the Download input."""
+    global url_entry, _last_urls_file_path
+    try:
+        initial_dir = ""
+        if _last_urls_file_path and os.path.isfile(_last_urls_file_path):
+            initial_dir = os.path.dirname(_last_urls_file_path) or ""
+        if not initial_dir and 'url_entry' in globals() and url_entry and url_entry.winfo_exists():
+            current = (url_entry.get() or "").strip()
+            if current and os.path.isfile(current):
+                initial_dir = os.path.dirname(current) or ""
+            elif current and os.path.isdir(current):
+                initial_dir = current
+        if not initial_dir:
+            initial_dir = os.path.expanduser("~")
+        filepath = tkinter.filedialog.askopenfilename(
+            initialdir=initial_dir,
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            title="Select a text file with URLs",
+        )
+        if filepath:
+            _last_urls_file_path = filepath
+            if 'url_entry' in globals() and url_entry and url_entry.winfo_exists():
+                url_entry.delete(0, tkinter.END)
+                url_entry.insert(0, filepath)
+    except Exception as e:
+        print(f"Error browsing URL file: {e}")
+
 def clear_url_entry():
     global url_entry
     try:
@@ -20609,6 +20641,15 @@ if __name__ == "__main__":
         url_entry.bind("<FocusIn>", lambda e, w=url_entry: handle_focus_in(w))
         url_entry.bind("<FocusOut>", lambda e, w=url_entry: handle_focus_out(w))
         _setup_url_entry_drag_drop(url_entry)
+        # "..." browse button inside the input field: pick a text file with URLs.
+        # CTkEntry is a tkinter Frame, so the button is placed on top of its right edge.
+        browse_urls_button = customtkinter.CTkButton(
+            url_entry, text="...", width=26, height=22,
+            command=browse_urls_file,
+            fg_color=UI_ELEMENT_BG_COLOR, hover_color=LINK_COLOR,
+            corner_radius=4, font=("Segoe UI", 12),
+        )
+        browse_urls_button.place(relx=1.0, rely=0.5, anchor="e", x=-6)
         clear_url_button = customtkinter.CTkButton(url_frame, text="Clear", width=100, height=30, command=clear_url_entry, fg_color=UI_ELEMENT_BG_COLOR, hover_color=LINK_COLOR); clear_url_button.grid(row=0, column=2, sticky="e", padx=5)
         download_button = customtkinter.CTkButton(url_frame, text="Download", width=100, height=30, command=start_download_thread, fg_color=UI_ELEMENT_BG_COLOR, hover_color=LINK_COLOR, state="disabled"); download_button.grid(row=0, column=3, sticky="e", padx=5)
         path_frame = customtkinter.CTkFrame(download_tab, fg_color="transparent"); path_frame.grid(row=1, column=0, columnspan=4, sticky="ew", padx=10, pady=5); path_frame.grid_columnconfigure(1, weight=1)
