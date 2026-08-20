@@ -63,7 +63,6 @@ clone_module () {
 clone_module https://github.com/bascurtiz/orpheusdl-amazonmusic modules/amazonmusic
 clone_module https://github.com/bascurtiz/orpheusdl-applemusic modules/applemusic
 clone_module https://github.com/bascurtiz/orpheusdl-beatport modules/beatport
-clone_module https://github.com/bascurtiz/orpheusdl-beatsource modules/beatsource
 clone_module https://github.com/bascurtiz/orpheusdl-deezer modules/deezer
 clone_module https://github.com/bascurtiz/orpheusdl-qobuz modules/qobuz
 clone_module https://github.com/bascurtiz/orpheusdl-soundcloud modules/soundcloud

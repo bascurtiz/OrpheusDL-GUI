@@ -51,9 +51,9 @@ Name: "ffmpeg"; Description: "FFmpeg (Included - Recommended for conversions)"; 
 Name: "deno"; Description: "Deno (Required for YouTube module)"; Types: full custom; Flags: fixed
 
 Name: "modules"; Description: "Music Platform Modules"; Types: full custom
+Name: "modules\amazonmusic"; Description: "Amazon Music support"; Types: full custom
 Name: "modules\applemusic"; Description: "Apple Music support"; Types: full custom
 Name: "modules\beatport"; Description: "Beatport support"; Types: full custom
-Name: "modules\beatsource"; Description: "Beatsource support"; Types: full custom
 Name: "modules\deezer"; Description: "Deezer support"; Types: full custom
 Name: "modules\musixmatch"; Description: "Musixmatch support"; Types: full custom
 Name: "modules\lrclib"; Description: "LRCLIB support"; Types: full custom
@@ -92,9 +92,12 @@ Source: "..\..\ffprobe.exe"; DestDir: "{app}"; Components: ffmpeg; Flags: ignore
 
 Source: "..\..\deno.exe"; DestDir: "{app}"; Components: deno; Flags: ignoreversion skipifsourcedoesntexist
 
+Source: "..\..\packager-win-x64.exe"; DestDir: "{app}"; Components: main; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\..\mp4decrypt.exe"; DestDir: "{app}"; Components: main; Flags: ignoreversion skipifsourcedoesntexist
+
+Source: "{#RepoDir}\modules\amazonmusic\*"; DestDir: "{app}\modules\amazonmusic"; Components: modules\amazonmusic; Flags: recursesubdirs
 Source: "{#RepoDir}\modules\applemusic\*"; DestDir: "{app}\modules\applemusic"; Components: modules\applemusic; Flags: recursesubdirs
 Source: "{#RepoDir}\modules\beatport\*"; DestDir: "{app}\modules\beatport"; Components: modules\beatport; Flags: recursesubdirs
-Source: "{#RepoDir}\modules\beatsource\*"; DestDir: "{app}\modules\beatsource"; Components: modules\beatsource; Flags: recursesubdirs
 Source: "{#RepoDir}\modules\deezer\*"; DestDir: "{app}\modules\deezer"; Components: modules\deezer; Flags: recursesubdirs
 Source: "{#RepoDir}\modules\musixmatch\*"; DestDir: "{app}\modules\musixmatch"; Components: modules\musixmatch; Flags: recursesubdirs
 Source: "{#RepoDir}\modules\lrclib\*"; DestDir: "{app}\modules\lrclib"; Components: modules\lrclib; Flags: recursesubdirs

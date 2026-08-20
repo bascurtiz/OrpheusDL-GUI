@@ -39,7 +39,6 @@ pip3 install --upgrade --ignore-installed certifi || pip3 install --force-reinst
 git clone https://github.com/bascurtiz/orpheusdl-amazonmusic modules/amazonmusic
 git clone https://github.com/bascurtiz/orpheusdl-applemusic modules/applemusic
 git clone https://github.com/bascurtiz/orpheusdl-beatport modules/beatport
-git clone https://github.com/bascurtiz/orpheusdl-beatsource modules/beatsource
 git clone https://github.com/bascurtiz/orpheusdl-deezer modules/deezer
 git clone https://github.com/bascurtiz/orpheusdl-qobuz modules/qobuz
 git clone https://github.com/bascurtiz/orpheusdl-soundcloud modules/soundcloud

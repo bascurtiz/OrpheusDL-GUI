@@ -17,10 +17,10 @@
     <ul>
       <li>Cross-platform support (Windows, macOS, Linux) with easy installation</li>
       <li>Thoughtful and modern graphical user interface</li>
-      <li>Supports all major platforms: Apple Music, Beatport, Beatsource, Deezer, Qobuz, SoundCloud, Spotify, Tidal, YouTube</li>
+      <li>Supports all major platforms: Apple Music, Beatport, Deezer, Qobuz, SoundCloud, Spotify, Tidal, YouTube</li>
       <li>Unified search across all platforms or individual search by type (track, album, playlist, artist, label)</li>
       <li>Search and explore Dolby Atmos releases on Tidal</li>
-      <li>Search by label on Beatport and Beatsource</li>
+      <li>Search by label on Beatport</li>
       <li>Advanced downloading: batch downloads (using text-file input), specific track selection, and quality options per download</li>
       <li>Context menu integration for quick actions and source links</li>
       <li>Concurrent or sequential download modes</li>
