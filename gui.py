@@ -22130,7 +22130,7 @@ Unnecessary Lossless-to-Lossless""",
                             widget.bind("<FocusIn>", lambda e, w=widget: handle_focus_in(w))
                             widget.bind("<FocusOut>", lambda e, w=widget: handle_focus_out(w))
                             if full_key in TEMPLATE_VARIABLES:
-                                # "PREVIEW:" prefix in caps + Segoe UI; the rendered filename
+                                # "Preview:" prefix + Segoe UI; the rendered filename
                                 # next to it stays in the console font and uses the brightest
                                 # text color. The 'Available variables' button packs into the
                                 # right end of this same row.
@@ -22140,7 +22140,7 @@ Unnecessary Lossless-to-Lossless""",
                                 # right edge, not the Reset column.
                                 preview_frame.grid(row=row + 1, column=1, sticky="ew", padx=(5, 5), pady=(0, 2))
                                 preview_prefix_label = customtkinter.CTkLabel(
-                                    preview_frame, text="PREVIEW:",
+                                    preview_frame, text="Preview:",
                                     text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 9), anchor="w",
                                 )
                                 preview_prefix_label.pack(side="left")
