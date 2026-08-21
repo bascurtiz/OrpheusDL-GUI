@@ -18755,14 +18755,14 @@ def _create_credential_tab_content(platform_name, tab_frame):
             # Instructions
             # Step 1
             step1_frame = customtkinter.CTkFrame(left_col, fg_color="transparent")
-            step1_frame.pack(anchor="w", pady=0)
+            step1_frame.pack(anchor="w", pady=(0, 2))
             
-            customtkinter.CTkLabel(step1_frame, text="1.", font=("Segoe UI", 12, "bold"), text_color=WHITE_TEXT_COLOR, width=35).pack(side="left", anchor="n")
+            customtkinter.CTkLabel(step1_frame, text="1.", font=("Segoe UI", 12, "bold"), text_color=WHITE_TEXT_COLOR, width=35).pack(side="left", anchor="nw")
             customtkinter.CTkLabel(step1_frame, text="Install extension", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left")
             
             # Step 1 bullets
             step1_bullets_frame = customtkinter.CTkFrame(left_col, fg_color="transparent")
-            step1_bullets_frame.pack(anchor="w", pady=(0, 5))
+            step1_bullets_frame.pack(anchor="w", pady=(0, 2))
             customtkinter.CTkLabel(step1_bullets_frame, text="", width=35).pack(side="left") # Indent
             
             customtkinter.CTkLabel(step1_bullets_frame, text="• Chrome / Edge → ", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left")
@@ -18783,9 +18783,9 @@ def _create_credential_tab_content(platform_name, tab_frame):
 
             # Step 2
             step2_frame = customtkinter.CTkFrame(left_col, fg_color="transparent")
-            step2_frame.pack(anchor="w", pady=0)
+            step2_frame.pack(anchor="w", pady=(0, 2))
             
-            customtkinter.CTkLabel(step2_frame, text="2.", font=("Segoe UI", 12, "bold"), text_color=WHITE_TEXT_COLOR, width=35).pack(side="left", anchor="n")
+            customtkinter.CTkLabel(step2_frame, text="2.", font=("Segoe UI", 12, "bold"), text_color=WHITE_TEXT_COLOR, width=35).pack(side="left", anchor="nw")
             
             step2_text_frame = customtkinter.CTkFrame(step2_frame, fg_color="transparent")
             step2_text_frame.pack(side="left")
@@ -18803,15 +18803,15 @@ def _create_credential_tab_content(platform_name, tab_frame):
 
             # Step 3
             step3_frame = customtkinter.CTkFrame(left_col, fg_color="transparent")
-            step3_frame.pack(anchor="w", pady=(5, 0))
+            step3_frame.pack(anchor="w", pady=(0, 2))
             
-            customtkinter.CTkLabel(step3_frame, text="3.", font=("Segoe UI", 12, "bold"), text_color=WHITE_TEXT_COLOR, width=35).pack(side="left", anchor="n")
+            customtkinter.CTkLabel(step3_frame, text="3.", font=("Segoe UI", 12, "bold"), text_color=WHITE_TEXT_COLOR, width=35).pack(side="left", anchor="nw")
             customtkinter.CTkLabel(step3_frame, text="Export & save as ", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left")
             customtkinter.CTkLabel(step3_frame, text="cookies.txt", font=("Segoe UI", 12, "italic"), text_color=GRAY_TEXT_COLOR).pack(side="left")
             
             # Step 3 Path
             step3_path_frame = customtkinter.CTkFrame(left_col, fg_color="transparent")
-            step3_path_frame.pack(anchor="w", pady=(0, 5))
+            step3_path_frame.pack(anchor="w", pady=(0, 2))
             customtkinter.CTkLabel(step3_path_frame, text="", width=35).pack(side="left") # Indent
             customtkinter.CTkLabel(step3_path_frame, text="Path: ", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left")
             customtkinter.CTkLabel(step3_path_frame, text="./config/cookies.txt", font=("Segoe UI", 12, "italic"), text_color=GRAY_TEXT_COLOR).pack(side="left")
@@ -18861,11 +18861,11 @@ def _create_credential_tab_content(platform_name, tab_frame):
 
             def _pack_wrapper_step(parent, step_num, builder):
                 frame = customtkinter.CTkFrame(parent, fg_color="transparent")
-                frame.pack(anchor="w", pady=(4, 0))
+                frame.pack(anchor="w", pady=(0, 2))
                 customtkinter.CTkLabel(
                     frame, text=f"{step_num}.", font=("Segoe UI", 12, "bold"),
                     text_color=WHITE_TEXT_COLOR, width=35,
-                ).pack(side="left", anchor="n")
+                ).pack(side="left", anchor="nw")
                 content = customtkinter.CTkFrame(frame, fg_color="transparent")
                 content.pack(side="left", anchor="w")
                 builder(content)
