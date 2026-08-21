@@ -17,6 +17,14 @@ MODULES_SRC = os.path.join(SPEC_DIR, 'modules')
 ffmpeg_datas, ffmpeg_binaries, ffmpeg_hiddenimports = collect_all('ffmpeg')
 print(f"[PyInstaller] Collected ffmpeg submodules: {ffmpeg_hiddenimports}")
 
+# Collect unplayplay and its complex dependencies (unicorn, capstone)
+# These are required for the Spotify Desktop API (lossless/flac downloads)
+up_datas, up_binaries, up_hiddenimports = collect_all('unplayplay')
+uni_datas, uni_binaries, uni_hiddenimports = collect_all('unicorn')
+cap_datas, cap_binaries, cap_hiddenimports = collect_all('capstone')
+
+# Collect votify and its missing dependencies
+voti_datas, voti_binaries, voti_hiddenimports = collect_all('votify')
 dc_datas, dc_binaries, dc_hiddenimports = collect_all('dataclass-click')
 iq_datas, iq_binaries, iq_hiddenimports = collect_all('inquirerpy')
 _tkdnd_datas, _tkdnd_binaries, _tkdnd_hiddenimports = collect_all('tkinterdnd2')
@@ -25,15 +33,41 @@ httpx_retries_datas, httpx_retries_binaries, httpx_retries_hiddenimports = colle
 print(f"[PyInstaller] Collected structlog hiddenimports: {len(structlog_hiddenimports)}")
 print(f"[PyInstaller] Collected httpx_retries hiddenimports: {len(httpx_retries_hiddenimports)}")
 
+print(f"[PyInstaller] Collected unplayplay, unicorn, capstone, and votify assets")
+
 # Collect additional data files based on what exists in the source directory
 additional_datas = [
     ('icon.ico', '.'),
     ('icon.icns', '.'),
     ('icon.png', '.'),
     ('update_checker.py', '.'),
+    ('key_emu_prod.py', '.'),
+    ('runtime_prod.py', '.'),
+    ('modules/spotify/decrypt_worker.py', 'modules/spotify'),
 ]
 
-# Vendored librespot-python (Spotify OAuth/stream path)
+# Spotify.dll 1.2.88.472 PlayPlay: SEH metadata from cycyrild/another-unplayplay (key_emu_prod.py)
+# — required for lossless/FLAC when using that client. ~18 MB (mostly runtimefunction.json).
+# If missing, copy from https://github.com/cycyrild/another-unplayplay (src/unplayplay/generated/)
+_ANOTHER_UP = os.path.join(SPEC_DIR, 'vendor', 'another_unplayplay')
+_n_bundled = 0
+if os.path.isdir(_ANOTHER_UP):
+    for _n in ('throwinfo.json', 'runtimefunction.json'):
+        _json_path = os.path.join(_ANOTHER_UP, _n)
+        if os.path.isfile(_json_path):
+            additional_datas.append((_json_path, 'vendor/another_unplayplay'))
+            _n_bundled += 1
+    if _n_bundled:
+        print(f"[PyInstaller] vendor/another_unplayplay: bundled {_n_bundled} SEH JSON file(s) (Spotify 1.2.88 PlayPlay)")
+else:
+    print("[PyInstaller] WARNING: vendor/another_unplayplay/ missing — Spotify 1.2.88 lossless keygen may not work in the frozen app")
+
+# Spotify.dll is NOT bundled into the frozen app — installers download it at
+# setup time (see install_orpheus-win.bat / macOS.sh / linux.sh).  The
+# onefile exe ships without it; the GUI shows a Missing-Spotify.dll dialog
+# with a download link if the user enables Desktop/FLAC mode.
+
+# Vendored librespot-python (Spotify OAuth/stream path when not using Spotify.dll)
 _librespot_vendor_root = os.path.join(SPEC_DIR, "vendor", "librespot")
 _librespot_files = 0
 if os.path.isdir(_librespot_vendor_root):
@@ -181,8 +215,8 @@ a = Analysis(
     # gamdl is pulled from pip (gamdl>=3.8.5) so the compiled Rust decrypt engine
     # (gamdl._ammuxer) is bundled from site-packages instead of the vendored source copy.
     pathex=['.', os.path.join(SPEC_DIR, 'vendor', 'librespot')],
-    binaries=additional_binaries + ffmpeg_binaries + dc_binaries + iq_binaries + _tkdnd_binaries + structlog_binaries + httpx_retries_binaries,
-    datas=additional_datas + ffmpeg_datas + dc_datas + iq_datas + _tkdnd_datas + structlog_datas + httpx_retries_datas,
+    binaries=additional_binaries + ffmpeg_binaries + up_binaries + uni_binaries + cap_binaries + voti_binaries + dc_binaries + iq_binaries + _tkdnd_binaries + structlog_binaries + httpx_retries_binaries,
+    datas=additional_datas + ffmpeg_datas + up_datas + uni_datas + cap_datas + voti_datas + dc_datas + iq_datas + _tkdnd_datas + structlog_datas + httpx_retries_datas,
     hiddenimports=[
         'certifi',
         'colorama',
@@ -251,7 +285,13 @@ a = Analysis(
         'modules.applemusic.interface',
         'gamdl',                    # Apple Music (pip install gamdl>=3.8.5)
         'gamdl._ammuxer',           # Compiled Rust decrypt/mux extension inside the gamdl wheel
-    ] + ffmpeg_hiddenimports + dc_hiddenimports + iq_hiddenimports + _tkdnd_hiddenimports + structlog_hiddenimports + httpx_retries_hiddenimports + _librespot_hiddenimports + _librespot_player_hi,
+        'unplayplay',               # Spotify Desktop API
+        'unicorn',                  # Dependency for unplayplay
+        'capstone',                 # Dependency for unplayplay
+        'pefile',                   # Dependency for unplayplay
+        'pydantic',                 # Dependency for unplayplay
+        'votify',                   # Missing dependency for Spotify Desktop API
+    ] + ffmpeg_hiddenimports + up_hiddenimports + uni_hiddenimports + cap_hiddenimports + voti_hiddenimports + dc_hiddenimports + iq_hiddenimports + _tkdnd_hiddenimports + structlog_hiddenimports + httpx_retries_hiddenimports + collect_submodules('unplayplay') + collect_submodules('votify') + _librespot_hiddenimports + _librespot_player_hi,
     excludes=[
         'torch', 'cuda', 'pytorch', 'matplotlib', 'pandas', 'numpy',
         # The app is tkinter/customtkinter only; exclude Qt so PyInstaller never

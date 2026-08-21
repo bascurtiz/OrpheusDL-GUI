@@ -104,6 +104,7 @@ Source: "{#RepoDir}\modules\lrclib\*"; DestDir: "{app}\modules\lrclib"; Componen
 Source: "{#RepoDir}\modules\qobuz\*"; DestDir: "{app}\modules\qobuz"; Components: modules\qobuz; Flags: recursesubdirs
 Source: "{#RepoDir}\modules\soundcloud\*"; DestDir: "{app}\modules\soundcloud"; Components: modules\soundcloud; Flags: recursesubdirs
 Source: "{#RepoDir}\modules\spotify\*"; DestDir: "{app}\modules\spotify"; Components: modules\spotify; Flags: recursesubdirs
+Source: "{#RepoDir}\Spotify.dll"; DestDir: "{app}"; Components: modules\spotify; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#RepoDir}\modules\tidal\*"; DestDir: "{app}\modules\tidal"; Components: modules\tidal; Flags: recursesubdirs
 Source: "{#RepoDir}\modules\youtube\*"; DestDir: "{app}\modules\youtube"; Components: modules\youtube; Flags: recursesubdirs
 

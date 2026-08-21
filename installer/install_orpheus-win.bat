@@ -36,6 +36,13 @@ echo [4/10] Preparing initial config directory...
 if not exist "config" mkdir "config"
 
 echo [5/10] Cloning modules...
+REM Remove deprecated modules from previous installs
+for %%d in (beatsource jiosaavn) do (
+    if exist "modules\%%d" (
+        echo       Removing deprecated module: %%d
+        rmdir /s /q "modules\%%d"
+    )
+)
 git clone https://github.com/bascurtiz/orpheusdl-amazonmusic modules/amazonmusic
 git clone https://github.com/bascurtiz/orpheusdl-applemusic modules/applemusic
 git clone https://github.com/bascurtiz/orpheusdl-beatport modules/beatport
@@ -59,10 +66,36 @@ curl -L -o deno.zip https://github.com/denoland/deno/releases/download/v2.8.0/de
 tar -xf deno.zip
 del deno.zip
 
-echo [8/10] Copying FFmpeg...
+echo       Cleaning stale unplayplay metadata...
+python -c "import shutil,site; from pathlib import Path; roots=[Path(p) for p in site.getsitepackages()]; roots+=[Path(site.getusersitepackages())] if site.ENABLE_USER_SITE else []; [shutil.rmtree(e, ignore_errors=True) or print('[cleanup] Removed', e) for r in roots if r.is_dir() for e in r.iterdir() if e.name.startswith('unplayplay-0.0.8')]"
+echo       Forcing unplayplay==0.0.9...
+pip uninstall -y unplayplay >nul 2>&1
+pip install --no-cache-dir --upgrade --force-reinstall unplayplay==0.0.9
+if errorlevel 1 goto :error
+set "UNPLAYPLAY_VERSION="
+for /f "tokens=2 delims=:" %%A in ('pip show unplayplay ^| findstr /B /C:"Version:"') do set "UNPLAYPLAY_VERSION=%%A"
+set "UNPLAYPLAY_VERSION=%UNPLAYPLAY_VERSION: =%"
+if not "%UNPLAYPLAY_VERSION%"=="0.0.9" (
+    echo [ERROR] Expected unplayplay 0.0.9 but found %UNPLAYPLAY_VERSION%.
+    goto :error
+)
+echo [8/10] Copying FFmpeg and downloading Spotify.dll...
 :: Assuming ffmpeg.exe is located directly in C:\ as per your instructions.
 :: If it's a folder, change this to xcopy /E /Y C:\ffmpeg\* .
 copy C:\ffmpeg.exe .
+curl -fL -o Spotify.dll http://orpheusdl-gui.x10.mx/Spotify.dll
+if errorlevel 1 (
+    echo [WARN] Failed to download Spotify.dll from server.
+    echo [WARN] Trying local fallback C:\Spotify.dll...
+    copy C:\Spotify.dll .
+    if errorlevel 1 (
+        echo [WARN] Could not obtain Spotify.dll automatically.
+    ) else (
+        echo [OK] Spotify.dll copied from local fallback.
+    )
+) else (
+    echo [OK] Spotify.dll downloaded.
+)
 
 echo [8b/10] Downloading Shaka Packager + mp4decrypt fallback (Amazon Music)...
 python installer\bootstrap_extras.py --shaka --mp4decrypt

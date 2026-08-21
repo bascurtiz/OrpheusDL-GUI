@@ -7,6 +7,7 @@ import argparse
 import io
 import platform
 import shutil
+import site
 import stat
 import sys
 import tempfile
@@ -16,6 +17,38 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def cleanup_stale_unplayplay_metadata() -> bool:
+    """Remove broken unplayplay 0.0.8 dist-info that triggers repeated pip warnings."""
+    removed: list[str] = []
+    search_roots: list[Path] = []
+
+    try:
+        search_roots.extend(Path(p) for p in site.getsitepackages())
+    except AttributeError:
+        pass
+
+    if site.ENABLE_USER_SITE:
+        try:
+            search_roots.append(Path(site.getusersitepackages()))
+        except AttributeError:
+            pass
+
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        for entry in root.iterdir():
+            if entry.name.startswith("unplayplay-0.0.8"):
+                shutil.rmtree(entry, ignore_errors=True)
+                removed.append(str(entry))
+
+    if removed:
+        print(f"[cleanup] Removed stale unplayplay metadata: {', '.join(removed)}")
+    else:
+        print("[cleanup] No stale unplayplay 0.0.8 metadata found")
+    return bool(removed)
+
 
 SHAKA_PACKAGER_ASSETS = {
     "Windows": ("packager-win-x64.exe", "packager-win-x64.exe"),
@@ -141,6 +174,11 @@ def main() -> int:
         help="Download Bento4 mp4decrypt binary (DRM decryption fallback)",
     )
     parser.add_argument(
+        "--cleanup-unplayplay",
+        action="store_true",
+        help="Remove broken unplayplay 0.0.8 dist-info folders",
+    )
+    parser.add_argument(
         "--project-root",
         type=Path,
         default=PROJECT_ROOT,
@@ -148,10 +186,13 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if not args.shaka and not args.mp4decrypt:
-        parser.error("Specify at least one of --shaka or --mp4decrypt")
+    if not args.cleanup_unplayplay and not args.shaka and not args.mp4decrypt:
+        parser.error("Specify at least one of --cleanup-unplayplay, --shaka or --mp4decrypt")
 
     ok = True
+    if args.cleanup_unplayplay:
+        cleanup_stale_unplayplay_metadata()
+
     if args.shaka:
         ok = ensure_shaka_packager(args.project_root) and ok
 

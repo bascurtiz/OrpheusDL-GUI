@@ -18,6 +18,16 @@ rm -rf temp_core
 
 echo "[3/9] Installing core Python requirements..."
 pip3 install --upgrade --ignore-installed -r requirements.txt
+echo "      Cleaning stale unplayplay metadata..."
+python3 -c "import shutil,site; from pathlib import Path; roots=[Path(p) for p in site.getsitepackages()]; roots+=[Path(site.getusersitepackages())] if site.ENABLE_USER_SITE else []; [shutil.rmtree(e, ignore_errors=True) or print('[cleanup] Removed', e) for r in roots if r.is_dir() for e in r.iterdir() if e.name.startswith('unplayplay-0.0.8')]"
+echo "      Forcing unplayplay==0.0.9..."
+pip3 uninstall -y unplayplay >/dev/null 2>&1 || true
+pip3 install --no-cache-dir --upgrade --force-reinstall "unplayplay==0.0.9"
+UNPLAYPLAY_VERSION="$(pip3 show unplayplay 2>/dev/null | awk -F': ' '/^Version:/{print $2}')"
+if [ "$UNPLAYPLAY_VERSION" != "0.0.9" ]; then
+    echo "[FATAL] Expected unplayplay 0.0.9 but found '${UNPLAYPLAY_VERSION:-not installed}'."
+    exit 1
+fi
 pip3 install --no-deps --target vendor/librespot git+https://github.com/kokarare1212/librespot-python
 if [ -n "$LIBRESPOT_CORE_PATCH_URL" ]; then
     echo "      Applying patched librespot core.py..."
@@ -33,6 +43,14 @@ mkdir -p config
 
 echo "[5/10] Cloning modules..."
 mkdir -p modules
+
+# Remove deprecated modules from previous installs
+for _stale in beatsource jiosaavn; do
+    if [ -d "modules/$_stale" ]; then
+        echo "      Removing deprecated module: $_stale"
+        rm -rf "modules/$_stale"
+    fi
+done
 
 # macOS specific fix for Apple Music (skip broken uninstall when RECORD metadata is missing)
 pip3 install --upgrade --ignore-installed certifi || pip3 install --force-reinstall --no-deps certifi
@@ -58,6 +76,17 @@ echo "[7/10] Downloading and extracting Deno (macOS version)..."
 curl -L -o deno.zip https://github.com/denoland/deno/releases/download/v2.7.9/deno-x86_64-apple-darwin.zip
 unzip -o deno.zip
 rm deno.zip
+
+echo "[8/10] Downloading Spotify.dll (required for lossless/FLAC)..."
+if [ ! -f "Spotify.dll" ]; then
+    if curl -fsSL "http://orpheusdl-gui.x10.mx/Spotify.dll" -o Spotify.dll; then
+        echo "[OK] Spotify.dll downloaded."
+    else
+        echo "[WARN] Failed to download Spotify.dll."
+    fi
+else
+    echo "Spotify.dll already present, skipping download"
+fi
 
 echo "      Note: Make sure FFmpeg is installed (e.g., via Homebrew: brew install ffmpeg)"
 

@@ -28,7 +28,6 @@ AVAILABLE_MODULES = [
     "amazonmusic",
     "applemusic",
     "beatport",
-    "beatsource",
     "deezer",
     "musixmatch",
     "lrclib",
@@ -44,7 +43,6 @@ MODULE_NAMES = {
     "amazonmusic": "Amazon Music",
     "applemusic": "Apple Music",
     "beatport": "Beatport",
-    "beatsource": "Beatsource",
     "deezer": "Deezer",
     "musixmatch": "Musixmatch",
     "lrclib": "LRCLIB",
@@ -583,6 +581,9 @@ def create_inno_setup_script(modules=None):
         module_components += f'Name: "modules\\{m}"; Description: "{name} support"; Types: full custom\n'
 
         module_files += f'Source: "{{#RepoDir}}\\modules\\{m}\\*"; DestDir: "{{app}}\\modules\\{m}"; Components: modules\\{m}; Flags: recursesubdirs\n'
+
+        if m == "spotify":
+            module_files += f'Source: "{{#RepoDir}}\\Spotify.dll"; DestDir: "{{app}}"; Components: modules\\{m}; Flags: ignoreversion skipifsourcedoesntexist\n'
 
     iss = f"""
 #define MyAppName "OrpheusDL GUI"
