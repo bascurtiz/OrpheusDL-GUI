@@ -20521,6 +20521,7 @@ if __name__ == "__main__":
                     "ignore_existing_files": False,
                     "reverify_existing_files": False,
                 },
+                "formatting": { "discography_format": "{name} {quality}", "album_format": "{artist}/{name}", "playlist_format": "{name}", "force_album_format": False, "use_album_artist_for_discography": False, "track_filename_format": "{track_number}. {artist} - {name}", "playlist_track_filename_format": "", "single_full_path_format": "{artist} - {name}", "enable_zfill": True, "use_playlist_position": False, "use_album_position": False, "filename_separator": "", "metadata_separator": ", ", "split_metadata": False },
                 "artist_downloading": {
                     "return_credited_albums": True,
                     "separate_tracks_skip_downloaded": True,
@@ -20528,7 +20529,10 @@ if __name__ == "__main__":
                     "merge_same_name_albums": False,
                     "explicit_content": "prefer_explicit",
                 },
-                "formatting": { "discography_format": "{name} {quality}", "album_format": "{artist}/{name}", "playlist_format": "{name}", "force_album_format": False, "use_album_artist_for_discography": False, "track_filename_format": "{track_number}. {artist} - {name}", "playlist_track_filename_format": "", "single_full_path_format": "{artist} - {name}", "enable_zfill": True, "use_playlist_position": False, "use_album_position": False, "filename_separator": "", "metadata_separator": ", ", "split_metadata": False },
+                "playlist": { "save_m3u": True, "paths_m3u": "absolute", "extended_m3u": True, "group_by_album": False, "m3u_only": False, "sync": False, "sync_remove_orphaned": False },
+                "covers": { "embed_cover": True, "main_compression": "high", "main_resolution": 1400, "save_original_cover_size": False, "save_external": False, "external_format": "png", "external_compression": "low", "external_resolution": 3000, "save_animated_cover": True },
+                "lyrics": { "embed_lyrics": True, "embed_synced_lyrics": False, "save_synced_lyrics": True },
+                "module_defaults": { "lyrics": "default", "covers": "default", "credits": "default" },
                 "codecs": {
                     "proprietary_codecs": False,
                     "spatial_codecs": True,
@@ -20547,10 +20551,6 @@ if __name__ == "__main__":
                     "enable_undesirable_conversions": False,
                     "hide_ffmpeg_warning": False,
                 },
-                "module_defaults": { "lyrics": "default", "covers": "default", "credits": "default" },
-                "lyrics": { "embed_lyrics": True, "embed_synced_lyrics": False, "save_synced_lyrics": True },
-                "covers": { "embed_cover": True, "main_compression": "high", "main_resolution": 1400, "save_original_cover_size": False, "save_external": False, "external_format": "png", "external_compression": "low", "external_resolution": 3000, "save_animated_cover": True },
-                "playlist": { "save_m3u": True, "paths_m3u": "absolute", "extended_m3u": True, "group_by_album": False, "m3u_only": False, "sync": False, "sync_remove_orphaned": False },
                 "advanced": {
                     "advanced_login_system": False,
                     "debug_mode": False,
@@ -21518,6 +21518,22 @@ if __name__ == "__main__":
         settings_tabview = customtkinter.CTkTabview(master=settings_tab, command=_handle_settings_tab_change)
         settings_tabview.pack(expand=True, fill="both", padx=5, pady=5)
         global_settings_tab = settings_tabview.add("Global")
+        # --- Quick-jump navigation bar (fixed at top, never scrolls) ---
+        _nav_bar = customtkinter.CTkFrame(global_settings_tab, fg_color="transparent")
+        _nav_bar.pack(fill="x", padx=5, pady=(6, 2))
+        _section_header_widgets = {}   # maps section_key -> header label widget
+        _nav_links = []                # (label_widget, section_key) for scroll binding
+        _NAV_SECTIONS = ["general", "formatting", "artist_downloading", "playlist",
+                         "covers", "lyrics", "module_defaults", "codecs",
+                         "codec_conversion", "advanced"]
+        _nav_inner = customtkinter.CTkFrame(_nav_bar, fg_color="transparent")
+        _nav_inner.pack(anchor="center")
+        for _i, _nav_key in enumerate(_NAV_SECTIONS):
+            _nav_label = customtkinter.CTkLabel(
+                _nav_inner, text=_nav_key.replace("_", " ").upper(),
+                text_color=LINK_COLOR, font=("Segoe UI", 10), cursor=HAND_CURSOR_LINK)
+            _nav_label.pack(side="left", padx=(0, 12))
+            _nav_links.append((_nav_label, _nav_key))
         global_settings_frame = customtkinter.CTkScrollableFrame(global_settings_tab)
         globals()['global_settings_frame'] = global_settings_frame
         global_settings_frame.pack(expand=True, fill="both", padx=5, pady=(0, 5))
@@ -21819,7 +21835,10 @@ Unnecessary Lossless-to-Lossless""",
 
         for section_key, section_value in DEFAULT_SETTINGS["globals"].items():
             if isinstance(section_value, dict):
-                customtkinter.CTkLabel(global_settings_frame, text=section_key.replace("_", " ").upper(), text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11)).grid(row=row, column=0, columnspan=3, sticky="w", padx=(0, 10), pady=(10, 5)); row += 1
+                _sec_hdr = customtkinter.CTkLabel(global_settings_frame, text=section_key.replace("_", " ").upper(), text_color=GRAY_TEXT_COLOR, font=("Segoe UI", 11))
+                _sec_hdr.grid(row=row, column=0, columnspan=3, sticky="w", padx=(0, 10), pady=(10, 5))
+                _section_header_widgets[section_key] = _sec_hdr
+                row += 1
                 # Tracks widgets of the collapsible "Metadata / tags" group (Formatting).
                 # The group starts expanded; the toggle collapses it.
                 _options_group = {"active": False, "open": True, "widgets": [], "toggle": None}
@@ -22457,6 +22476,40 @@ Unnecessary Lossless-to-Lossless""",
                                 label_widget.grid_remove()
                             if widget is not None:
                                 widget.grid_remove()
+        # --- Bind nav-bar links to scroll to each section ---
+        def _scroll_to_section(_event, _target_key):
+            """Scroll the Global settings frame so the target section header is visible."""
+            hdr = _section_header_widgets.get(_target_key)
+            if hdr is None:
+                return
+            def _do_scroll(_hdr=hdr):
+                try:
+                    canvas = getattr(global_settings_frame, "_parent_canvas", None)
+                    if canvas is None:
+                        return
+                    canvas.update_idletasks()
+                    sr = canvas.cget("scrollregion")
+                    if not sr:
+                        return
+                    total_h = float(sr.split()[3])
+                    if total_h <= 0:
+                        return
+                    # Relative scroll: measure how far the header is from
+                    # where we want it (60 px from top of viewport).
+                    # root coordinates are absolute and reliable.
+                    hdr_y    = _hdr.winfo_rooty()
+                    canvas_y = canvas.winfo_rooty()
+                    delta    = hdr_y - canvas_y - 5    # >0 means header is too far down
+                    canvas.yview_moveto(
+                        min(1.0, max(0.0, canvas.yview()[0] + delta / total_h)))
+                except Exception:
+                    pass
+            # Small delay so layout is settled before measuring
+            hdr.after(30, _do_scroll)
+        for _nav_lbl, _nav_key in _nav_links:
+            _nav_lbl.bind("<Button-1>", lambda e, k=_nav_key: _scroll_to_section(e, k))
+            _nav_lbl.bind("<Enter>", lambda e, l=_nav_lbl: l.configure(text_color=LINK_HOVER_COLOR))
+            _nav_lbl.bind("<Leave>", lambda e, l=_nav_lbl: l.configure(text_color=LINK_COLOR))
         _zfill_var = settings_vars.get("globals", {}).get("formatting.enable_zfill")
         if isinstance(_zfill_var, tkinter.BooleanVar) and _template_preview_callbacks:
             _zfill_var.trace_add("write", lambda *a: [cb() for cb in _template_preview_callbacks])
