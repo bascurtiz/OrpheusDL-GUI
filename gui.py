@@ -18845,7 +18845,15 @@ def _create_credential_tab_content(platform_name, tab_frame):
             )
             optional_label.pack(anchor="w", padx=(_setup_header_title_indent(), 0), pady=(2, 0))
             
-            wrapper_demo_url = "https://youtu.be/NxDHE6F_Aes"
+            _wrapper_demo_urls = {
+                "Windows": "https://www.youtube.com/watch?v=NxDHE6F_Aes",
+                "Darwin": "https://www.youtube.com/watch?v=dfya0bYJ2vM",
+                "Linux": "https://www.youtube.com/watch?v=wCEiGXEyAEs",
+            }
+            _wrapper_demo_url = _wrapper_demo_urls.get(
+                platform.system(),
+                "https://www.youtube.com/watch?v=NxDHE6F_Aes",
+            )
 
             wrapper_demo_btn = customtkinter.CTkButton(
                 help_frame,
@@ -18855,7 +18863,7 @@ def _create_credential_tab_content(platform_name, tab_frame):
                 font=("Segoe UI", 11),
                 fg_color=BUTTON_COLOR,
                 hover_color=LINK_COLOR,
-                command=lambda: _open_url(wrapper_demo_url)
+                command=lambda u=_wrapper_demo_url: _open_url(u)
             )
             wrapper_demo_btn.place(relx=1.0, y=20, anchor="ne", x=-15)
 
@@ -18889,7 +18897,7 @@ def _create_credential_tab_content(platform_name, tab_frame):
 
             _pack_wrapper_step(right_col, 2, lambda row: (
                 customtkinter.CTkLabel(row, text="See description below ", font=("Segoe UI", 12), text_color=GRAY_TEXT_COLOR).pack(side="left"),
-                _add_setup_link(row, "video", wrapper_demo_url),
+                _add_setup_link(row, "video", _wrapper_demo_url),
             ))
 
             customtkinter.CTkLabel(
