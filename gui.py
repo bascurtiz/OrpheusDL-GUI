@@ -22023,30 +22023,31 @@ Unnecessary Lossless-to-Lossless""",
             ("Amazon Music", "https://github.com/bascurtiz/OrpheusDL-amazonmusic"),
             ("Apple Music", "https://github.com/bascurtiz/orpheusdl-applemusic"),
             ("Beatport", "https://github.com/bascurtiz/orpheusdl-beatport"),
-            ("Deezer", "https://github.com/bascurtiz/OrpheusDL-deezer"),            
+            ("Deezer", "https://github.com/bascurtiz/OrpheusDL-deezer"),
             ("Genius", "https://github.com/Dniel97/orpheusdl-genius"),
-            ("Idagio", "https://github.com/Dniel97/orpheusdl-idagio"),
             ("LRCLIB", "https://github.com/bascurtiz/orpheusdl-lrclib"),
             ("Musixmatch", "https://github.com/yarrm80s/orpheusdl-musixmatch"),
-            ("Napster", "https://github.com/yarrm80s/orpheusdl-napster"),
-            ("Nugs.net", "https://github.com/Dniel97/orpheusdl-nugs"),
-            ("Qobuz", "https://github.com/bascurtiz/orpheusdl-qobuz"),            
+            ("Qobuz", "https://github.com/bascurtiz/orpheusdl-qobuz"),
             ("SoundCloud", "https://github.com/bascurtiz/orpheusdl-soundcloud"),
             ("Spotify", "https://github.com/bascurtiz/orpheusdl-spotify"),
             ("TIDAL", "https://github.com/bascurtiz/orpheusdl-tidal"),
             ("YouTube", "https://github.com/bascurtiz/orpheusdl-youtube")
         ]
         module_buttons_data.sort(key=lambda item: item[0])
-        cols = 8
+        cols = 6
         rows = (len(module_buttons_data) + cols - 1) // cols if module_buttons_data else 0
         button_width = 100
         button_height = 30
         button_padx = 2
         button_pady = 2
         def _build_module_buttons():
+            total = len(module_buttons_data)
+            last_row_count = total % cols if total % cols else cols
             for index, (name, url) in enumerate(module_buttons_data):
                 row = index // cols
                 col = index % cols
+                if row == rows - 1 and last_row_count != cols:
+                    col += (cols - last_row_count) // 2
                 command = lambda u=url: _open_url(u)
                 button = customtkinter.CTkButton(
                     modules_frame,
