@@ -13870,6 +13870,12 @@ def _tidal_additional_for_display(additional: str) -> str:
 
     for part in raw_parts:
         upper = part.upper()
+        # Sony 360RA: match the short badge/folder label used by Amazon and the
+        # downloader (360RA), regardless of the source wording (360 Reality Audio,
+        # MPEG-H, 3D MPEG-H Audio, …).
+        if re.search(r"mpeg-h|mha1|mhm1|360\s*reality|\b360ra\b", part, re.IGNORECASE):
+            _append_once("360RA")
+            continue
         if "ATMOS" in upper or "DOLBY ATMOS" in upper or "◗◖" in part:
             _append_once("◗◖ ATMOS")
             continue
@@ -13877,9 +13883,15 @@ def _tidal_additional_for_display(additional: str) -> str:
             _append_once("🅷 HI-RES")
             continue
 
+    # Tier order matches the context menu: 360RA → ATMOS → HI-RES.
+    ordered: list[str] = []
+    for badge in ("360RA", "◗◖ ATMOS", "🅷 HI-RES"):
+        if badge in out:
+            ordered.append(badge)
+
     if track_count:
-        out.insert(0, track_count)
-    return " / ".join(out)
+        ordered.insert(0, track_count)
+    return " / ".join(ordered)
 
 
 def _format_additional_column(additional, platform=None) -> str:
@@ -15953,7 +15965,7 @@ def _amazonmusic_context_menu_canonical(label: str, store_key: str) -> tuple[str
         if re.search(
             r"mpeg-h|mha1|mhm1|immersive|ra360|\b360\b", spatial, re.IGNORECASE
         ):
-            return ("3D MPEG-H Audio", sk if "RA360" in sk else "SPATIAL_RA360")
+            return ("360RA", sk if "RA360" in sk else "SPATIAL_RA360")
         return ("◗◖ ATMOS", sk if sk.startswith("SPATIAL") else "SPATIAL_ATMOS")
 
     parsed = ModuleInterface._parse_khz_bit_display_label(manifest) or ModuleInterface._parse_khz_bit_display_label(raw)
@@ -16030,13 +16042,13 @@ def _amazonmusic_option_from_additional_part(part: str) -> tuple[str, str] | Non
     if "atmos" in pl or "◗" in part:
         return ("◗◖ ATMOS", "SPATIAL_ATMOS")
     if "mpeg-h" in pl or ("3d" in pl and "mpeg" in pl):
-        return ("3D MPEG-H Audio", "SPATIAL_RA360")
+        return ("360RA", "SPATIAL_RA360")
     if ("reality" in pl or "ra360" in pl or "immersive" in pl) and re.search(
         r"\b360\b", pl
     ):
-        return ("3D MPEG-H Audio", "SPATIAL_RA360")
+        return ("360RA", "SPATIAL_RA360")
     if "immersive" in pl and "audio" in pl:
-        return ("3D MPEG-H Audio", "SPATIAL_RA360")
+        return ("360RA", "SPATIAL_RA360")
     if "hi-res" in pl or "🅷" in part or "ʜɪ" in pl:
         return ("🅷 HI-RES", "UHD")
     if re.search(r"\bopus\b", pl):
@@ -16778,8 +16790,8 @@ def _to_small_caps(s):
             res += mapping.get(lower_char, char)
         return res
 
-    # MPEG-H spatial → "360ʀᴀ" (small caps)
-    if re.search(r"mpeg-h|mha1|mhm1", s, re.IGNORECASE):
+    # MPEG-H spatial / 360RA → "360ʀᴀ" (small caps)
+    if re.search(r"mpeg-h|mha1|mhm1|360ra", s, re.IGNORECASE):
         return transform("360RA")
 
     # Targeted keywords (case-insensitive search)
