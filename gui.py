@@ -4998,6 +4998,17 @@ def _fetch_and_expand_album_playlist(parent_iid, item_data):
             return
         platform_name = (item_data.get('platform') or '').lower().replace(" ", "")
         item_type = (item_data.get('type') or '').lower()
+        # Normalize filter-suffixed types back to the base type so Amazon SPATIAL
+        # ("album (SPATIAL)" / "album (SPATIAL_360RA)" / "album (SPATIAL_ATMOS)") and
+        # Tidal ATMOS ("album (ATMOS)") albums/playlists expand like plain ones.
+        for _p in ('spatial_360ra', 'spatial_atmos', 'spatial', 'atmos'):
+            item_type = (
+                item_type.replace(f"({_p})", " ")
+                .replace(f"( {_p} )", " ")
+                .replace(f"({_p} )", " ")
+                .replace(f"( {_p})", " ")
+            )
+        item_type = item_type.strip()
         res_id = item_data.get('id')
         # Allow album, playlist, or YouTube channel (channel expand shows uploads as tracks)
         if not platform_name or not res_id:
@@ -6442,7 +6453,9 @@ def _try_lazy_load_preview(item_iid, item_data):
 
                 elif current_platform == 'amazonmusic':
                     # Amazon Music: no preview URLs — decrypt full track (low quality) for local playback
-                    if (item_data.get('type') or 'track').lower() == 'track' and hasattr(
+                    # Normalize filter-suffixed types (e.g. "track (SPATIAL)") back to "track".
+                    _am_track_base = (item_data.get('type') or 'track').lower().split('(')[0].strip()
+                    if _am_track_base == 'track' and hasattr(
                         module_instance, 'get_preview_audio_path'
                     ):
                         country = item_data.get('media_region_country')
@@ -13438,19 +13451,29 @@ def update_search_types(platform):
     _update_search_placeholder()
 
 def _update_atmos_filter_visibility(*args):
-    """Show ATMOS checkbox only when Platform is Tidal/Apple Music and Type is not artist."""
+    """Show filter checkboxes under the search field:
+    - ATMOS when Platform is Tidal/Apple Music and Type is not artist.
+    - Amazon SPATIAL (360RA MHA1/MHM1 + Dolby Atmos) when Platform is Amazon Music."""
     try:
-        if 'atmos_filter_frame' not in globals() or not atmos_filter_frame or not atmos_filter_frame.winfo_exists():
-            return
         if 'platform_var' not in globals() or not platform_var or 'type_var' not in globals() or not type_var:
             return
         platform = (platform_var.get() or "").strip().lower()
-        # Handle cases where the type might have (atmos) in it already
+        # Handle cases where the type might have (atmos)/ (spatial) in it already
         current_type = (type_var.get() or "").strip().lower()
-        if platform in ("tidal", "applemusic", "apple music") and "artist" not in current_type:
-            atmos_filter_frame.grid(row=1, column=0, sticky="w", pady=(4, 0))
-        else:
-            atmos_filter_frame.grid_remove()
+
+        # Tidal / Apple Music: Dolby Atmos-only checkbox
+        if 'atmos_filter_frame' in globals() and atmos_filter_frame and atmos_filter_frame.winfo_exists():
+            if platform in ("tidal", "applemusic", "apple music") and "artist" not in current_type:
+                atmos_filter_frame.grid(row=1, column=0, sticky="w", pady=(4, 0))
+            else:
+                atmos_filter_frame.grid_remove()
+
+        # Amazon Music: spatial (360RA + Atmos) checkbox
+        if 'amazon_spatial_filter_frame' in globals() and amazon_spatial_filter_frame and amazon_spatial_filter_frame.winfo_exists():
+            if platform in ("amazonmusic", "amazon music") and "artist" not in current_type:
+                amazon_spatial_filter_frame.grid(row=1, column=0, sticky="w", pady=(4, 0))
+            else:
+                amazon_spatial_filter_frame.grid_remove()
     except (NameError, tkinter.TclError, Exception):
         pass
 
@@ -13476,7 +13499,17 @@ def _update_search_placeholder(*args):
                 atmos_enabled = atmos_filter_var.get()
             except (tkinter.TclError, Exception):
                 pass
-        if platform in ("tidal", "applemusic", "apple music") and atmos_enabled and current_type != "artist":
+        amazon_spatial_enabled = False
+        if platform in ("amazonmusic", "amazon music") and 'amazon_spatial_360_var' in globals() and 'amazon_spatial_atmos_var' in globals():
+            try:
+                amazon_spatial_enabled = bool(
+                    (amazon_spatial_360_var and amazon_spatial_360_var.get())
+                    or (amazon_spatial_atmos_var and amazon_spatial_atmos_var.get())
+                )
+            except (tkinter.TclError, Exception):
+                pass
+        if ((platform in ("tidal", "applemusic", "apple music") and atmos_enabled)
+                or (platform in ("amazonmusic", "amazon music") and amazon_spatial_enabled)) and current_type != "artist":
             placeholder = "Enter search query or hit search to explore..."
         else:
             placeholder = "Enter search query..."
@@ -13743,6 +13776,79 @@ def display_results(results):
         pass
 
 ATMOS_EXPLORE_TYPES = ("track (atmos)", "album (atmos)", "playlist (atmos)", "track (ATMOS)", "album (ATMOS)", "playlist (ATMOS)")
+AMAZON_SPATIAL_EXPLORE_TYPES = (
+    "track (spatial)", "album (spatial)", "playlist (spatial)",
+    "track (SPATIAL)", "album (SPATIAL)", "playlist (SPATIAL)",
+    "track (SPATIAL_360RA)", "album (SPATIAL_360RA)", "playlist (SPATIAL_360RA)",
+    "track (SPATIAL_ATMOS)", "album (SPATIAL_ATMOS)", "playlist (SPATIAL_ATMOS)",
+)
+
+def _amazon_content_encoding_markers(raw_result):
+    """Return a dict with '360ra' and 'atmos' booleans from Amazon contentEncoding flags.
+    Also inspects audioModes and a nested album entity, because track/album text-search
+    hits often carry the 360RA/Atmos flag at the album level only."""
+    out = {"360ra": False, "atmos": False}
+
+    def _scan(node, depth: int = 0):
+        if not isinstance(node, dict) or depth > 3:
+            return
+        enc = node.get("contentEncoding")
+        if isinstance(enc, dict):
+            for _k, _v in enc.items():
+                if _v in (False, 0, None, "", "false", "False"):
+                    continue
+                _kl = str(_k).lower()
+                if "atmos" in _kl and "360" not in _kl:
+                    out["atmos"] = True
+                elif "360" in _kl or "spatial" in _kl or "mpeg" in _kl or "mpgh" in _kl:
+                    out["360ra"] = True
+        for _flag in ("ra360Available", "ra360available", "ra360"):
+            if node.get(_flag) in (True, "true", "True", 1):
+                out["360ra"] = True
+        for _flag in ("atmosAvailable", "atmosavailable"):
+            if node.get(_flag) in (True, "true", "True", 1):
+                out["atmos"] = True
+        modes = node.get("audioModes") or []
+        if isinstance(modes, (list, tuple)):
+            for _m in modes:
+                _ms = str(_m).upper()
+                if "ATMOS" in _ms:
+                    out["atmos"] = True
+                elif "360" in _ms or "RA360" in _ms or "MPEG" in _ms or "SPATIAL" in _ms:
+                    if "360" in _ms or "RA360" in _ms or "MPEG" in _ms:
+                        out["360ra"] = True
+        album = node.get("album")
+        if isinstance(album, dict):
+            _scan(album, depth + 1)
+        if isinstance(node.get("data"), dict):
+            for _v in node["data"].values():
+                if isinstance(_v, dict):
+                    _scan(_v, depth + 1)
+
+    _scan(raw_result)
+    return out
+
+def _result_is_amazon_360ra(quality_str, raw_result):
+    """True when an Amazon result is Sony 360RA (MHA1/MHM1, 3D MPEG-H)."""
+    low = str(quality_str or "").lower()
+    if any(k in low for k in ("360", "3d mpeg", "mpeg-h", "ra360", "mha1", "mhm1")):
+        return True
+    return _amazon_content_encoding_markers(raw_result)["360ra"]
+
+def _result_is_amazon_atmos(quality_str, raw_result):
+    """True when an Amazon result is Dolby Atmos (incl. Immersive Audio badge)."""
+    text = str(quality_str or "")
+    low = text.lower()
+    if "atmos" in low or "immersive" in low or "◗" in text:
+        return True
+    if isinstance(raw_result, dict) and 'DOLBY_ATMOS' in (raw_result.get('audioModes') or []):
+        return True
+    return _amazon_content_encoding_markers(raw_result)["atmos"]
+
+def _result_has_amazon_spatial(quality_str, raw_result):
+    """True when an Amazon result is spatial (Sony 360RA MHA1/MHM1 or Dolby Atmos).
+    Mirrors _result_has_dolby_atmos but also catches 360RA/3D MPEG-H badges."""
+    return _result_is_amazon_360ra(quality_str, raw_result) or _result_is_amazon_atmos(quality_str, raw_result)
 
 def _result_has_dolby_atmos(quality_str, raw_result):
     """True if the result is Dolby Atmos (from quality string, 'Spatial' string, or raw Tidal audioModes)."""
@@ -14070,6 +14176,7 @@ def _run_single_platform_search(orpheus, platform_name, search_type_str, query, 
     # Normalize ATMOS type for branching (e.g., "album  ◗◖ ᴀᴛᴍᴏs" → "album (ATMOS)")
     normalized_type = search_type_str.replace("  ◗◖ ᴀᴛᴍᴏs", " (ATMOS)").replace("( ◗◖ ᴀᴛᴍᴏs )", "(ATMOS)").replace("(◗◖ ᴀᴛᴍᴏs )", "(ATMOS)").replace("(◗◖ ᴀᴛᴍᴏs)", "(ATMOS)").replace("(◗◖ atmos)", "(ATMOS)").replace("(◗◖ atmos )", "(ATMOS)").replace("(◗◖atmos )", "(ATMOS)").replace("(◗◖ATMOS )", "(ATMOS)").strip() if search_type_str else ""
     is_atmos_filter = platform_name and platform_name.lower() in ('tidal', 'apple music', 'applemusic') and search_type_str in ATMOS_EXPLORE_TYPES
+    is_amazon_spatial_filter = platform_name and platform_name.lower() in ('amazonmusic', 'amazon music') and search_type_str in AMAZON_SPATIAL_EXPLORE_TYPES
     query_stripped = (query or "").strip()
 
     # Apply empty query injection for Apple Music Atmos Explore
@@ -14216,7 +14323,20 @@ def _run_single_platform_search(orpheus, platform_name, search_type_str, query, 
         return formatted_results, None
 
     search_type_map = {"track": local_DownloadTypeEnum.track, "album": local_DownloadTypeEnum.album, "artist": local_DownloadTypeEnum.artist, "playlist": local_DownloadTypeEnum.playlist, "channel": local_DownloadTypeEnum.artist, "label": local_DownloadTypeEnum.label}
-    query_type = search_type_map.get((search_type_str or "").lower())
+    # Amazon spatial filter reuses the base type (strip the (SPATIAL) suffix for lookup)
+    effective_search_type = (search_type_str or "").lower()
+    amazon_spatial_filter = bool(is_amazon_spatial_filter)
+    amazon_spatial_subset = None  # None = no filter, 'both' / '360ra' / 'atmos'
+    if amazon_spatial_filter:
+        _low_suffix = normalized_type.lower()
+        if "spatial_360ra" in _low_suffix:
+            amazon_spatial_subset = "360ra"
+        elif "spatial_atmos" in _low_suffix:
+            amazon_spatial_subset = "atmos"
+        else:
+            amazon_spatial_subset = "both"
+        effective_search_type = _low_suffix.replace("(spatial_360ra)", "").replace("(spatial_atmos)", "").replace("(spatial)", "").replace("( spatial )", "").replace("(spatial )", "").replace("( spatial)", "").strip()
+    query_type = search_type_map.get(effective_search_type)
     if not query_type:
         return [], f"Invalid search type: {search_type_str}"
     try:
@@ -14226,7 +14346,45 @@ def _run_single_platform_search(orpheus, platform_name, search_type_str, query, 
                 module_instance = orpheus.load_module(orpheus_platform)
         else:
             module_instance = orpheus.load_module(orpheus_platform)
-        search_results = module_instance.search(query_type, query, limit=search_limit)
+        if amazon_spatial_filter and not query_stripped:
+            # Empty-query Amazon spatial explore: Amazon has no browse/explore endpoint,
+            # so inject search terms that surface spatial releases (mirrors Apple Music
+            # Atmos explore). Run both and merge, deduping by ASIN.
+            # Over-fetch hard: text-search for a single term returns only a handful of
+            # genuine spatial hits plus many false positives. To surface more real ones we
+            # run several spatial-surfacing queries per selected subset and merge, deduping
+            # by id, then cap the displayed results to `search_limit` below.
+            if amazon_spatial_subset == "360ra":
+                _spatial_queries = ["360 Reality Audio", "360RA", "360 Reality", "Spatial Audio"]
+            elif amazon_spatial_subset == "atmos":
+                _spatial_queries = ["Dolby Atmos", "Atmos", "Spatial Audio"]
+            else:  # both
+                _spatial_queries = [
+                    "Dolby Atmos", "Atmos", "Spatial Audio", "360 Reality Audio",
+                ]
+            # Keep each query small enough to stay fast; the spatial filter and the
+            # merged multi-query pool still provide plenty of genuine results.
+            try:
+                _fetch_pool = min(max(int(search_limit), int(search_limit) + 50), 150)
+            except (TypeError, ValueError):
+                _fetch_pool = 100
+            _merged: list = []
+            _seen_ids: set = set()
+            for _q in _spatial_queries:
+                try:
+                    _res = module_instance.search(query_type, _q, limit=_fetch_pool)
+                except Exception:
+                    _res = []
+                for _r in _res:
+                    _rid = str(getattr(_r, 'result_id', '') or '')
+                    if _rid and _rid in _seen_ids:
+                        continue
+                    if _rid:
+                        _seen_ids.add(_rid)
+                    _merged.append(_r)
+            search_results = _merged
+        else:
+            search_results = module_instance.search(query_type, query, limit=search_limit)
     except Exception as e:
         return [], _format_search_error(platform_name, e)
 
@@ -14266,6 +14424,17 @@ def _run_single_platform_search(orpheus, platform_name, search_type_str, query, 
         _name = str(getattr(result, 'name', '') or '')
         _artists_str = ', '.join([str(a) for a in getattr(result, 'artists', []) or []]) or ''
         quality_str = _build_additional_string(result, search_type_str, raw_result, platform_name)
+        # Amazon spatial filter: keep only the selected subset(s)
+        if amazon_spatial_filter:
+            if amazon_spatial_subset == "360ra":
+                if not _result_is_amazon_360ra(quality_str, raw_result):
+                    continue
+            elif amazon_spatial_subset == "atmos":
+                if not _result_is_amazon_atmos(quality_str, raw_result):
+                    continue
+            else:  # both
+                if not _result_has_amazon_spatial(quality_str, raw_result):
+                    continue
         formatted_result = {
             'id': str(getattr(result, 'result_id', '')),
             'title': _name,
@@ -14296,6 +14465,8 @@ def _run_single_platform_search(orpheus, platform_name, search_type_str, query, 
                 formatted_result['proxy_id'] = extra_kwargs['proxy_id']
         formatted_results.append(formatted_result)
         if search_stop_requested: break
+        if amazon_spatial_filter and search_limit and len(formatted_results) >= search_limit:
+            break
     return formatted_results, None
 
 
@@ -14455,8 +14626,8 @@ def run_search_thread_target(orpheus, platform_name, search_type_str, query, gui
         if search_stop_requested:
             early_return = True
             return
-            
         results, error_message = _run_single_platform_search(orpheus, platform_name, search_type_str, query, search_limit, output_queue)
+
         if results:
             error_message = None
     except Exception as e:
@@ -14527,8 +14698,20 @@ def start_search():
             base = (search_type_str or "").strip().lower()
             if base in ("album", "playlist", "track"):
                 search_type_str = ("track (ATMOS)" if base == "track" else "album (ATMOS)" if base == "album" else "playlist (ATMOS)")
+        # When Amazon Music + spatial sub-checkbox(es): effective type encodes the
+        # selected subset, e.g. "album (SPATIAL_360RA)", "album (SPATIAL_ATMOS)",
+        # or plain "album (SPATIAL)" when both 360RA and Atmos are wanted.
+        if platform_name and platform_name.strip().lower() in ('amazonmusic', 'amazon music'):
+            _sp360 = bool(globals().get('amazon_spatial_360_var') and amazon_spatial_360_var.get())
+            _spatmos = bool(globals().get('amazon_spatial_atmos_var') and amazon_spatial_atmos_var.get())
+            if _sp360 or _spatmos:
+                base = (search_type_str or "").strip().lower()
+                if base in ("album", "playlist", "track"):
+                    _suffix = "(SPATIAL_360RA)" if (_sp360 and not _spatmos) else "(SPATIAL_ATMOS)" if (_spatmos and not _sp360) else "(SPATIAL)"
+                    search_type_str = f"{base} {_suffix}"
         is_atmos_explore = platform_name and platform_name.strip().lower() in ('tidal', 'apple music', 'applemusic') and search_type_str in ATMOS_EXPLORE_TYPES
-        if not query and not is_atmos_explore: show_centered_messagebox("Info", "Please enter a search query.", dialog_type="warning"); return
+        is_amazon_spatial_explore = platform_name and platform_name.strip().lower() in ('amazonmusic', 'amazon music') and search_type_str in AMAZON_SPATIAL_EXPLORE_TYPES
+        if not query and not is_atmos_explore and not is_amazon_spatial_explore: show_centered_messagebox("Info", "Please enter a search query.", dialog_type="warning"); return
         if not platform_name: show_centered_messagebox("Info", "Please select a platform.", dialog_type="warning"); return
         if not search_type_str: show_centered_messagebox("Info", "Please select a search type.", dialog_type="warning"); return
         if search_process_active: show_centered_messagebox("Busy", "A search is already in progress!", dialog_type="warning"); return
@@ -20510,6 +20693,53 @@ if __name__ == "__main__":
         globals()["atmos_filter_var"] = atmos_filter_var
         globals()["atmos_filter_frame"] = atmos_filter_frame
         globals()["atmos_filter_checkbox"] = atmos_filter_checkbox
+        # AMAZON SPATIAL filters: under search field; two independent sub-checkboxes
+        # (360RA = Sony MHA1/MHM1, ATMOS = Dolby Atmos). At least one enabled keeps the
+        # matching releases. Same visual style as the TIDAL ATMOS checkbox.
+        def _make_amazon_spatial_checkbox(frame, var, text, tooltip):
+            checkbox = customtkinter.CTkCheckBox(frame, text="", variable=var, width=24, height=22, command=lambda: (app.focus_set(), _update_search_placeholder()))
+            checkbox.pack(side="left")
+
+            def _toggle(event=None):
+                var.set(not var.get())
+                app.focus_set()
+                _update_search_placeholder()
+
+            icon_label = customtkinter.CTkLabel(frame, text="◗◖", font=("Segoe UI", 15), text_color=CONTEXT_MENU_TEXT_COLOR, cursor=HAND_CURSOR_BUTTON)
+            icon_label.pack(side="left", padx=(0, 4))
+            icon_label.bind("<Button-1>", _toggle)
+
+            text_label = customtkinter.CTkLabel(frame, text=text, font=("Segoe UI", 11), text_color=CONTEXT_MENU_TEXT_COLOR, cursor=HAND_CURSOR_BUTTON)
+            text_label.pack(side="left", pady=(2, 0))
+            text_label.bind("<Button-1>", _toggle)
+            CTkToolTip(
+                checkbox,
+                message=tooltip,
+                bg_color=TOOLTIP_MENU_BG,
+                text_color=WHITE_TEXT_COLOR,
+                padx=12, pady=12
+            )
+            return checkbox
+
+        amazon_spatial_filter_frame = customtkinter.CTkFrame(search_input_frame, fg_color="transparent", height=1)
+        amazon_spatial_360_var = tkinter.BooleanVar(value=False)
+        amazon_spatial_360_checkbox = _make_amazon_spatial_checkbox(
+            amazon_spatial_filter_frame, amazon_spatial_360_var, "360RA",
+            "Keep Sony 360RA releases only (MHA1 / MHM1)."
+        )
+        customtkinter.CTkLabel(amazon_spatial_filter_frame, text=" | ", font=("Segoe UI", 11), text_color=GRAY_TEXT_COLOR).pack(side="left", padx=(6, 6))
+        amazon_spatial_atmos_var = tkinter.BooleanVar(value=False)
+        amazon_spatial_atmos_checkbox = _make_amazon_spatial_checkbox(
+            amazon_spatial_filter_frame, amazon_spatial_atmos_var, "ATMOS",
+            "Keep Dolby Atmos releases only."
+        )
+        amazon_spatial_filter_frame.pack_forget()  # Shown by update_search_types when AMAZON MUSIC and type != artist
+        globals()["amazon_spatial_filter_frame"] = amazon_spatial_filter_frame
+        globals()["amazon_spatial_filter_checkbox"] = amazon_spatial_360_checkbox
+        globals()["amazon_spatial_360_var"] = amazon_spatial_360_var
+        globals()["amazon_spatial_360_checkbox"] = amazon_spatial_360_checkbox
+        globals()["amazon_spatial_atmos_var"] = amazon_spatial_atmos_var
+        globals()["amazon_spatial_atmos_checkbox"] = amazon_spatial_atmos_checkbox
         button_search_frame = customtkinter.CTkFrame(controls_frame, fg_color="transparent"); button_search_frame.grid(row=0, column=5, padx=(5,0), sticky="n")
         search_button = customtkinter.CTkButton(button_search_frame, text="Search", command=start_search, width=100, height=30, fg_color=UI_ELEMENT_BG_COLOR, hover_color=LINK_COLOR, state="disabled"); search_button.pack(side="left", padx=(0, 6))
         update_search_types(platform_var.get())
