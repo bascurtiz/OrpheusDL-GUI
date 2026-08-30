@@ -88,6 +88,7 @@ except ImportError:
 
 from utils.utils import (
     find_system_ffmpeg,
+    ffmpeg_has_opus,
     locate_ffmpeg,
     is_missing_executable_error,
     get_clean_env,
@@ -1811,6 +1812,7 @@ _youtube_thumbnail_fetching = set()  # Track which YouTube items are currently f
 _youtube_thumbnail_queue = []  # Queue for YouTube thumbnail fetches to limit concurrent requests
 _youtube_max_concurrent_fetches = 2  # Maximum number of concurrent YouTube thumbnail fetches
 _lazy_loading_preview_iid = None  # Track which item is currently fetching a preview URL
+_am_preview_last_error = None  # module error string for the last Amazon preview attempt (for accurate messaging)
 _audio_process = None  # Track subprocess for afplay/xdg-open (for stopping)
 _pulse_after_id = None  # Track the after() ID for pulsing animation
 _pulse_state = False  # Track current pulse state (bright/dim)
@@ -6363,7 +6365,7 @@ def _try_lazy_load_preview(item_iid, item_data):
         
         # Fetch preview URL in background thread
         def fetch_preview_url():
-            global _lazy_loading_preview_iid
+            global _lazy_loading_preview_iid, _am_preview_last_error
             preview_url = None
             try:
                 # Check if user clicked on another item while we were loading
@@ -6463,11 +6465,49 @@ def _try_lazy_load_preview(item_iid, item_data):
                             raw = item_data.get('raw_result')
                             if isinstance(raw, dict):
                                 country = raw.get('musicTerritory') or raw.get('music_territory')
-                        preview_url = module_instance.get_preview_audio_path(
-                            track_id, media_region_country=country
-                        )
+                        global _am_preview_last_error
+                        _am_preview_err = None
+                        try:
+                            preview_url = module_instance.get_preview_audio_path(
+                                track_id, media_region_country=country
+                            )
+                        except Exception as _am_preview_exc:
+                            preview_url = None
+                            _am_preview_err = str(_am_preview_exc) or type(_am_preview_exc).__name__
+                        _am_preview_last_error = _am_preview_err
+                        if preview_url:
+                            _am_preview_last_error = None
                         if preview_url:
                             print(f"[Preview] Amazon Music decrypted preview ready: {preview_url}")
+                        elif _am_preview_err and 'decrypt' in _am_preview_err.lower():
+                            # The module raised FileNotFoundError("Unable to decrypt...").
+                            # Diagnosed: occurs on Free-tier accounts with entitlement master keys
+                            # disabled, where the Widevine/license + Shaka decrypt step is skipped
+                            # by design BEFORE Shaka is invoked. Config (.wvd/login/packager) is
+                            # typically fine — the account tier is the blocker for previews AND
+                            # downloads alike.
+                            _am_diag = ""
+                            try:
+                                _creds = getattr(module_instance, 'tsc', None)
+                                if _creds is not None:
+                                    _raw = _creds.read('credentials') or {}
+                                    _tiers = []
+                                    for _cc in (_raw or {}):
+                                        _ent = ((_raw.get(_cc) or {}).get('tier') if isinstance(_raw.get(_cc), dict) else None)
+                                        _tiers.append(f"{_cc}={_ent or '?'}")
+                                    if _tiers:
+                                        _am_diag = " |  Cached logins: " + ", ".join(_tiers)
+                            except Exception:
+                                _am_diag = ""
+                            print(
+                                f"[Preview] Amazon Music preview failed: cannot decrypt the track "
+                                f"({_am_preview_err}). This is usually an account-tier limitation "
+                                f"(Free tier with master keys disabled skips DRM decryption); "
+                                f".wvd path, login, and Shaka Packager are already configured. "
+                                f"A paid (Prime/Unlimited) or master-key-enabled account is required "
+                                f"for decrypting previews/downloads."
+                                + _am_diag
+                            )
                         else:
                             print(
                                 "[Preview] Amazon Music preview failed. "
@@ -6497,7 +6537,7 @@ def _try_lazy_load_preview(item_iid, item_data):
 
 def _on_preview_url_fetched(item_iid, item_data, preview_url):
     """Called when a lazy-loaded preview URL has been fetched."""
-    global tree, search_results_data, _lazy_loading_preview_iid
+    global tree, search_results_data, _lazy_loading_preview_iid, _am_preview_last_error
     
     try:
         # Stop loading animation
@@ -6537,10 +6577,20 @@ def _on_preview_url_fetched(item_iid, item_data, preview_url):
             elif platform_str == 'soundcloud':
                 print(f"[Preview] No preview available for this track (SoundCloud). The track may be restricted in your region or not streamable.")
             elif platform_str == 'amazonmusic':
-                print(
-                    "[Preview] Amazon Music preview unavailable. "
-                    "Ensure .wvd, login, and Shaka Packager are configured (first play decrypts the full track and may take a moment)."
-                )
+                if _am_preview_last_error and 'decrypt' in _am_preview_last_error.lower():
+                    print(
+                        f"[Preview] Amazon Music preview unavailable: cannot decrypt the track "
+                        f"({_am_preview_last_error}). This is usually an account-tier limitation "
+                        f"(Free tier with master keys disabled skips DRM decryption); the .wvd path, "
+                        f"login, and Shaka Packager are already configured. A paid (Prime/Unlimited) "
+                        f"or master-key-enabled account is required for decrypting previews/downloads."
+                    )
+                else:
+                    print(
+                        "[Preview] Amazon Music preview unavailable. "
+                        "Ensure .wvd, login, and Shaka Packager are configured (first play decrypts the full track and may take a moment)."
+                    )
+                _am_preview_last_error = None
             elif platform_str:
                 print(f"[Preview] No preview available for this track ({platform_str})")
             else:
@@ -12579,7 +12629,7 @@ def run_download_in_thread(orpheus, url, output_path, gui_settings, search_resul
             # quality. Their search result/URL never advertises "atmos", so a global downgrade
             # here would strip Atmos from the genuine Atmos editions too. Let each track resolve
             # Atmos-or-fallback inside the module instead.
-            result_type = str((search_result_data or {}).get('type', '')).lower()
+            result_type = str((search_result_data or {}).get('type', '')).lower().split('(')[0].strip()
             is_collection_download = (
                 result_type in ('artist', 'label', 'playlist')
                 or any(str(c).lower() in ('artist', 'label', 'playlist') for c in components)
@@ -16411,7 +16461,8 @@ def build_url_from_result(result_data):
     if not all([platform, search_type, item_id]): print("[URL Build] Missing data."); return None
 
     p_lower = platform.lower().replace(" ", "")
-    t_lower = search_type.lower()
+    # Strip filter suffixes like " (SPATIAL)" / " (ATMOS)" so the base type matches.
+    t_lower = search_type.lower().split('(')[0].strip()
     debug_mode = current_settings.get("globals", {}).get("advanced", {}).get("debug_mode", False) if 'current_settings' in globals() else False
 
     base_urls = { "qobuz": "https://open.qobuz.com", "tidal": "https://listen.tidal.com", "deezer": "https://www.deezer.com", "beatport": "https://www.beatport.com", "napster": "https://web.napster.com", "idagio": "https://app.idagio.com", "spotify": "https://open.spotify.com", "applemusic": "https://music.apple.com" }
@@ -22768,7 +22819,30 @@ Unnecessary Lossless-to-Lossless""",
         except:
             pass
         app.lift()
-        
+
+        # One-time startup warning: if the app-resolved ffmpeg can't encode Opus, tell
+        # the user to use the bundled ffmpeg.exe (needed for Amazon Music previews, which
+        # decrypt the full track to a minimum-quality Opus file). Non-modal so layout is up.
+        def _check_ffmpeg_opus_warning():
+            try:
+                _ff_found, _ff_path = find_system_ffmpeg()
+                if _ff_path and os.path.isfile(_ff_path) and not ffmpeg_has_opus(_ff_path):
+                    _msg = (
+                        "The ffmpeg being used cannot encode Opus, which is required for "
+                        "Amazon Music previews.\n\n"
+                        f"Resolved ffmpeg: {_ff_path}\n\n"
+                        "Use the bundled ffmpeg.exe next to this app instead of a system "
+                        "or third-party build (e.g. remove an older FFmpeg from PATH, or "
+                        "point settings at the bundled ffmpeg.exe)."
+                    )
+                    print(f"[FFmpeg] Opus encoder missing in {_ff_path}")
+                    if 'show_centered_messagebox' in globals():
+                        show_centered_messagebox("FFmpeg Opus warning", _msg, dialog_type="warning")
+            except Exception as _e:
+                print(f"[FFmpeg] Opus encoder check failed: {_e}")
+
+        app.after(1200, lambda: _check_ffmpeg_opus_warning())
+
         # Start background initialization
         def run_async_init():
             global _settings_just_created
