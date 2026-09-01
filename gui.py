@@ -6820,7 +6820,6 @@ def get_data_directory():
                 pass
     
     # Linux installation check
-    print(f"[get_data_directory] Checking Linux: frozen={is_frozen}, platform={platform.system()}")
     if is_frozen and platform.system().lower() == "linux":
         print("[get_data_directory] Linux detected")
         # Use ~/.config/OrpheusDL-GUI for installed Linux apps
@@ -6834,9 +6833,6 @@ def get_data_directory():
             # Fallback to tmp
             return os.path.join("/tmp", "OrpheusDL-GUI")
     
-    print(f"[get_data_directory] frozen={is_frozen}, has_meipass={has_meipass}, platform={platform.system()}, is_app_bundle={is_macos_app_bundle}")
-    print(f"[get_data_directory] Executable path: {abs_executable_path}")
-    print(f"[get_data_directory] Initial CWD: {initial_cwd}")
     if is_macos_app_bundle:
         print(f"[get_data_directory] Detection reason: {detection_reason}")
     
